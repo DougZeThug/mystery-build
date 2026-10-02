@@ -128,36 +128,40 @@ void main() {
   float br = brushAt(p);
   float slope = (brushAt(p + perp * e) - brushAt(p - perp * e)) * 0.5;
 
-  // casting: big soft clouds of redder copper and paler brass
+  // casting: an old statuary bronze, dark and brown, with soft clouds of redder copper and a
+  // cleaner, warmer face where it was worked
   float lf = fbm(p * 1.1 + uSeed);
   float mf = fbm(p * 4.2 - 11.0 + uSeed);
-  vec3 base = vec3(0.254, 0.133, 0.034);                     // #8a6534
-  vec3 hi   = vec3(0.571, 0.326, 0.093);                     // #c79a55
-  vec3 alb = mix(base, hi, clamp(0.32 + (lf - 0.5) * 0.6, 0.0, 1.0));
-  alb *= mix(vec3(1.07, 0.93, 0.86), vec3(0.95, 1.02, 1.08), smoothstep(0.3, 0.7, mf));
-  alb *= 0.965 + 0.07 * br;
+  vec3 base = vec3(0.082, 0.038, 0.014);
+  vec3 hi   = vec3(0.235, 0.112, 0.040);
+  vec3 alb = mix(base, hi, clamp(0.42 + (lf - 0.5) * 0.75, 0.0, 1.0));
+  alb *= mix(vec3(1.09, 0.92, 0.82), vec3(0.97, 1.0, 1.03), smoothstep(0.3, 0.7, mf));
+  alb *= 0.955 + 0.09 * br;
 
-  // tarnish: a few darker, browner blooms, more toward the rim
+  // tarnish: darker, browner blooms, more toward the rim
   float rim = max(abs(p.x), abs(p.y));
   float tn = fbm(p * 2.6 + vec2(5.2, -3.1));
-  float tarn = smoothstep(0.52, 0.78, tn + 0.18 * smoothstep(0.6, 1.0, rim));
-  alb *= mix(vec3(1.0), vec3(0.70, 0.60, 0.52), tarn * 0.45);
+  float tarn = smoothstep(0.50, 0.78, tn + 0.20 * smoothstep(0.55, 1.0, rim));
+  alb *= mix(vec3(1.0), vec3(0.62, 0.52, 0.46), tarn * 0.5);
 
-  // verdigris: sparse patches, gathered at the rim and corners, with a dark oxide ring and speckle
-  vec2 w = vec2(fbm(p * 2.8 + 1.7), fbm(p * 2.8 - 4.2));
-  float pn = fbm(p * 3.6 + w * 1.6 + 8.0);
-  float edgeB = smoothstep(0.62, 1.0, rim) + 0.6 * smoothstep(1.15, 1.38, length(p));
-  float th = 0.74 - 0.13 * edgeB;
-  float pat = smoothstep(th, th + 0.09, pn);
-  float ring = smoothstep(th - 0.08, th, pn) - pat;
-  float spk = smoothstep(0.9965 - 0.004 * edgeB, 1.0, hash12(floor(p * uTpu * 0.33) + uSeed));
-  pat = max(pat, spk * 0.8);
-  pat *= 0.72 + 0.28 * vnoise(p * 70.0);
-  alb *= 1.0 - 0.12 * ring;
+  // verdigris: small, sparse and organic. It starts in the pits and in the tarnish near the rim,
+  // creeps along the brushing, and never quite covers the metal.
+  vec2 w = vec2(fbm(p * 5.5 + 1.7), fbm(p * 5.5 - 4.2));
+  float pn = fbm(p * 9.0 + w * 1.4 + 8.0);
+  float pit = vnoise(p * 48.0) * 0.55 + vnoise(p * 131.0) * 0.45;
+  float edgeB = smoothstep(0.72, 1.0, rim) + 0.5 * smoothstep(1.2, 1.38, length(p));
+  float th = 0.66 - 0.09 * edgeB - 0.05 * tarn;
+  float grow = pn + (pit - 0.5) * 0.16 + (br - 0.5) * 0.05;
+  float pat = smoothstep(th, th + 0.06, grow);
+  float ring = smoothstep(th - 0.05, th, grow) - pat;
+  pat *= smoothstep(0.22, 0.62, pit);                        // speckled, never a solid fill
+  float spk = smoothstep(0.9975 - 0.003 * edgeB, 1.0, hash12(floor(p * uTpu * 0.4) + uSeed));
+  pat = max(pat, spk * 0.55);
+  alb *= 1.0 - 0.18 * ring;
 
   float scr = max(scratches(p, 5.0, 3.0 + uSeed, 0.30), max(scratches(p, 9.0, 11.0 + uSeed, 0.22), scratches(p, 17.0, 23.0 + uSeed, 0.16)));
-  float rough = clamp(0.40 + 0.12 * tarn + 0.08 * (mf - 0.5) + 0.6 * pat, 0.0, 1.0);
-  float cav = 1.0 - 0.1 * ring - 0.12 * tarn;
+  float rough = clamp(0.40 + 0.16 * tarn + 0.08 * (mf - 0.5) + 0.6 * pat, 0.0, 1.0);
+  float cav = 1.0 - 0.14 * ring - 0.14 * tarn;
 
   oA = vec4(pow(clamp(alb, 0.0, 1.0), vec3(1.0 / 2.2)), clamp(pat, 0.0, 1.0));
   oB = vec4(clamp(0.5 + slope * 2.2, 0.0, 1.0), scr, rough, cav);
@@ -228,16 +232,19 @@ uniform vec2 uFieldTexel;
 uniform vec2 uCkTexel;
 uniform vec2 uEnTexel;
 uniform vec2 uWearTexel;
+uniform vec2 uAim;         // where the beam's axis meets the plate (css px)
+uniform vec4 uDamp[6];     // felt dampers on the plate: u, v, r, on
 uniform sampler2D tMatA, tMatB, tFelt, tField, tSand, tWear, tCrack, tEngr, tLight;
 ${NOISE}
 #define T0(s, uv) textureLod(s, uv, 0.0)
-const vec3 LAMP_COL = vec3(1.0, 0.86, 0.70);
+const vec3 LAMP_COL = vec3(1.0, 0.85, 0.68);
 const vec3 SAND_LIT = vec3(0.815, 0.737, 0.578);   // #e9dfc8
 const vec3 SAND_SHD = vec3(0.258, 0.198, 0.125);   // #8b7b63
 const vec3 GOLD = vec3(1.0, 0.604, 0.133);         // #ffcc66
 const vec3 SEAM = vec3(1.0, 0.70, 0.34);           // kintsugi glow
 const vec3 PHOS = vec3(0.27, 1.0, 0.63);           // #8fffd0
-const vec3 VERD = vec3(0.050, 0.110, 0.078);       // #3f5d4f
+const vec3 VERD = vec3(0.046, 0.060, 0.050);       // old verdigris, greyed by a century of dust
+const vec3 VERD_CRUST = vec3(0.094, 0.112, 0.094);
 const float BRUSH_ANG = 0.11;
 
 float sdBox(vec2 q, vec2 b, float r) {
@@ -258,11 +265,13 @@ float sdHex(vec2 p, float r) {        // r = inradius (flat-to-centre)
   return length(p) * sign(p.y);
 }
 
-// spotlight pool: flat-ish hot centre, soft lens edge
+// spotlight pool: a theatrical spot aimed at the plate. A bright core about half a plate wide,
+// a long faint skirt that leaves the corners in half-shadow, and then the felt falls to black.
 float pool(vec2 css) {
-  float r = length(css - uLamp.xy) / uPoolR;
-  float edge = 1.0 - smoothstep(0.30, 1.10, r);
-  return edge * edge * (0.70 + 0.30 * exp(-r * r * 4.0));
+  float d = length(css - uAim) / (uPlate.z * 2.0);            // in plate widths
+  float core = exp(-d * d * 5.4);
+  float skirt = exp(-d * d * 1.75);
+  return (0.80 * core + 0.20 * skirt) * (1.0 - smoothstep(0.78, 1.35, d));
 }
 
 void main() {
@@ -277,10 +286,10 @@ void main() {
   vec2 gdx = vec2(pxU * 0.5, 0.0), gdy = vec2(0.0, pxU * 0.5);
 
   // light
-  float rr = length(css - uLamp.xy) / uPoolR;
+  float rr = length(css - uAim) / (unit * 2.0);
   vec3 lampCol = mix(LAMP_COL, vec3(1.0, 0.74, 0.42), uChoir * 0.55);
-  lampCol *= mix(vec3(1.0), vec3(1.04, 0.92, 0.80), smoothstep(0.55, 1.0, rr));   // warmer lens edge
-  float E = pool(css) * uLightI * 0.85 * (1.0 + 0.12 * uChoir);
+  lampCol *= mix(vec3(1.0), vec3(1.05, 0.90, 0.76), smoothstep(0.3, 0.8, rr));    // warmer, redder skirt
+  float E = pool(css) * uLightI * (1.0 + 0.14 * uChoir);
   vec3 Lv = vec3(uLamp.xy - css, uLamp.z);
   vec3 L = normalize(Lv);
   float amb = 0.004 + 0.022 * uLevel;
@@ -327,15 +336,30 @@ void main() {
     float wr = (T0(tWear, uvP + wo).r + T0(tWear, uvP - wo).r
               + T0(tWear, uvP + vec2(wo.x, -wo.y)).r + T0(tWear, uvP + vec2(-wo.x, wo.y)).r) * 0.25;
     float pol = smoothstep(0.08, 0.5, wr) * (0.55 + 0.45 * smoothstep(0.5, 0.9, wr));
-    alb = mix(alb, alb * vec3(1.18, 1.1, 1.0) + vec3(0.01, 0.005, 0.0), pol);
+    // felt dampers sitting on the bronze: a soft contact shadow, and a faint polished ring where
+    // the felt has been turned and slid
+    float dampSh = 1.0;
+    for (int i = 0; i < 6; i++) {
+      vec4 dm = uDamp[i];
+      if (dm.w < 0.5) continue;
+      vec2 dv = pu - dm.xy;
+      float dd = length(dv);
+      float r0 = dm.z;
+      vec2 awayP = normalize(css - uLamp.xy);
+      float cast = length(dv - awayP * r0 * 0.16);
+      dampSh *= 1.0 - 0.5 * (1.0 - smoothstep(r0 * 0.92, r0 * 1.42, cast));
+      dampSh *= 1.0 - 0.35 * exp(-max(dd - r0 * 0.97, 0.0) / (r0 * 0.09));
+      pol = max(pol, 0.55 * exp(-pow((dd - r0 * 1.2) / (r0 * 0.13), 2.0)) * (0.6 + 0.4 * vnoise(dv / r0 * 9.0)));
+    }
+    alb = mix(alb, alb * vec3(1.38, 1.24, 1.06) + vec3(0.016, 0.008, 0.002), pol);
     pat *= 1.0 - pol;
     rough = mix(rough, 0.3, pol * 0.5);
     slope *= 1.0 - 0.75 * pol;
     scr *= 1.0 - 0.8 * pol;
-    vec3 verd = mix(VERD * 1.5, vec3(0.17, 0.27, 0.21), smoothstep(0.3, 0.9, mA.a) * (0.5 + 0.5 * mB.b));
-    alb = mix(alb, verd, pat * 0.78);
+    vec3 verd = mix(VERD, VERD_CRUST, smoothstep(0.3, 0.9, mA.a) * (0.35 + 0.65 * vnoise(pu * 90.0)));
+    alb = mix(alb, verd, pat * 0.72);
     // the edge was handled for a century: a little brighter, a little cleaner
-    alb *= 1.0 + 0.18 * smoothstep(bw * 3.0, bw, din);
+    alb *= 1.0 + 0.12 * smoothstep(bw * 3.0, bw, din);
 
     // vibration: the plate moves where it is not still
     float f = T0(tField, uvP).r;
@@ -374,17 +398,18 @@ void main() {
     float NdH = max(dot(N, H), 0.0);
     vec3 T = normalize(vec3(dir, 0.0) - N * dot(N, vec3(dir, 0.0)));
     float TH = dot(T, H);
-    // lobes sized for a lamp 1.6 plate-widths up: hotspot ~0.25 wide, sheen ~0.6, brushed streak
-    float hot = pow(NdH, mix(110.0, 420.0, 1.0 - rough)) * mix(0.5, 1.35, 1.0 - rough);
-    float sheen = pow(NdH, 30.0) * 0.13;
-    float aniso = pow(sqrt(max(0.0, 1.0 - TH * TH)), mix(400.0, 1400.0, 1.0 - rough)) * pow(NdH, 14.0) * 1.1;
-    vec3 specCol = alb * 2.5 * (1.0 - pat * 0.92) + vec3(0.05, 0.045, 0.035) * pol;
-    vec3 Ed = lampCol * E * sandShadow;
+    // lobes sized for a lamp 1.6 plate-widths up: a tight hotspot, a soft sheen, the brushed streak.
+    // Bronze reflects its own warm colour: copper-amber, never lemon.
+    float hot = pow(NdH, mix(170.0, 560.0, 1.0 - rough)) * mix(0.22, 0.62, 1.0 - rough);
+    float sheen = pow(NdH, 34.0) * 0.075;
+    float aniso = pow(sqrt(max(0.0, 1.0 - TH * TH)), mix(400.0, 1400.0, 1.0 - rough)) * pow(NdH, 16.0) * 0.75;
+    vec3 specCol = mix(alb * 2.4, vec3(0.56, 0.36, 0.22), 0.42) * (1.0 - pat * 0.92) + vec3(0.035, 0.026, 0.018) * pol;
+    vec3 Ed = lampCol * E * sandShadow * dampSh;
 
     float shim = 1.0 + 0.16 * f * ph;
-    vec3 metal = alb * Ed * (mix(0.34, 1.0, pat) * NdL + 0.03) * cav;
+    vec3 metal = alb * Ed * (mix(0.46, 0.95, pat) * NdL + 0.03) * cav;
     metal += specCol * Ed * (hot + sheen + aniso * (1.0 - 0.6 * vib)) * cav;
-    metal += specCol * Ed * scr * 0.5 * pow(NdH, 30.0) * (1.0 - vib);
+    metal += specCol * Ed * scr * 0.4 * pow(NdH, 30.0) * (1.0 - vib);
     metal *= shim;
     metal += alb * amb * cav;
 
@@ -393,8 +418,8 @@ void main() {
     float bev = t * (1.0 - smoothstep(0.0, 1.0, t) * 0.3);
     float catchL = bev * max(0.0, dot(g, toward));
     float shadeL = bev * max(0.0, -dot(g, toward));
-    metal += specCol * lampCol * (0.15 + E) * catchL * catchL * 1.4;
-    metal *= 1.0 - 0.55 * shadeL;
+    metal += specCol * lampCol * (0.04 + E * 1.1) * catchL * catchL * 1.2;
+    metal *= 1.0 - 0.6 * shadeL;
     // a fine dark outline where the plate's side begins
     metal *= 1.0 - 0.6 * smoothstep(1.2 * px, 0.0, din);
 
@@ -402,7 +427,7 @@ void main() {
     if (uLmOn > 0.0) {
       // in full light the glow is a whisper; in the dark it is all there is
       vec3 sl = T0(tLight, (pu / uLmExt) * 0.5 + 0.5).rgb * (2.0 - 1.6 * smoothstep(0.0, 0.8, uLevel));
-      metal += sl * (alb * 2.1 + specCol * 0.15) * cav;
+      metal += sl * (alb * 4.6 + specCol * 0.18) * cav;
       lm = dot(sl, vec3(0.33));
     }
 
@@ -452,8 +477,10 @@ void main() {
       float aoS = 0.86 + 0.14 * smoothstep(0.05, 0.6, dS);
       sandCol = albS * (Ed / max(sandShadow, 0.01)) * (0.3 + 1.05 * lam * lam) * aoS;
       float glint = pow(max(dot(reflect(-L, Ng), vec3(0.0, 0.0, 1.0)), 0.0), 90.0) * step(0.5, hash12(cell + 3.0));
-      sandCol += lampCol * E * glint * 3.0;
-      sandCol += albS * amb * 0.35;
+      sandCol += lampCol * E * glint * 2.2;
+      // sand is matte and pale: it gathers the room's stray light, so the figure still reads in the
+      // half-shadow at the corners
+      sandCol += albS * (amb * 0.35 + 0.045 * uLightI * (1.0 - smoothstep(0.1, 0.7, E)));
       sandCol *= shim;
       if (uLmOn > 0.0) sandCol += albS * lm * 1.4 * vec3(0.9, 0.95, 1.0);
       sandA = cov;
@@ -589,22 +616,29 @@ void main() {
   float code = floor(aB.y + 0.001);
   float flags = aD.w;
   float lift = mod(floor(flags / 16.0), 2.0);
+  // the keeper (flag 64, or a singer of the fundamental itself): larger, slower, a long halo
+  float keeper = max(mod(floor(flags / 64.0), 2.0), 1.0 - step(0.5, aB.z));
+  if (keeper > 0.5) r *= 2.2;
   vec2 c = aA.xy;
   if (code > 4.5 && code < 5.5) {                       // startled: a shiver
     float ph = h11(r * 5000.0);
     c += vec2(sin(uTime * 61.0 + ph * 9.0), cos(uTime * 53.0 + ph * 7.0)) * r * 0.18 * (1.0 - fract(aB.y));
   }
+  if (code > 10.5 && code < 11.5) {                     // clinging on: a constant fine tremble
+    float ph = h11(r * 7919.0);
+    c += vec2(sin(uTime * 83.0 + ph * 11.0) + 0.5 * sin(uTime * 131.0), cos(uTime * 71.0 + ph * 5.0) + 0.5 * cos(uTime * 117.0)) * r * 0.05;
+  }
   vec2 ccss = uPlate.xy + c * uPlate.z;
   vec2 away = ccss - uLamp.xy;
   vSh = normalize(away + 1e-4) * (0.28 + 0.6 * lift) * (0.6 + 0.4 * clamp(length(away) / uLamp.z, 0.0, 1.0));
   if (uPass == 2) {
-    float R = 0.55;
+    float R = keeper > 0.5 ? 1.2 : 0.55;
     vec2 p = c + aCorner * R;
     vQ = aCorner * R;
     gl_Position = vec4(p / uLmExt, 0.0, 1.0);
     return;
   }
-  float ext = uPass == 0 ? 2.4 : 3.4;
+  float ext = uPass == 0 ? 2.4 : (keeper > 0.5 ? 5.2 : 3.4);
   vQ = aCorner * ext;
   vec2 css = ccss + aCorner * ext * r * uPlate.z;
   vec2 vp = uRes / uDpr;
@@ -634,6 +668,22 @@ const vec3 GOLD = vec3(1.0, 0.68, 0.22);
 float bit(float flags, float b) { return mod(floor(flags / b), 2.0); }
 vec3 sat(vec3 c, float k) { float l = dot(c, vec3(0.299, 0.587, 0.114)); return max(mix(vec3(l), c, k), 0.0); }
 
+// the keeper's figure: the fundamental's own contours (concentric, still at the rim) crossed by
+// faint radial lines
+float floorFigure(vec2 lq) {
+  float f = cos(1.5707963 * lq.x) * cos(1.5707963 * lq.y);
+  float fr = f * 4.0;
+  float wr = fwidth(fr);
+  float rings = 1.0 - smoothstep(0.0, wr * 1.3 + 0.05, abs(fract(fr + 0.5) - 0.5));
+  rings *= smoothstep(0.92, 0.6, f);                     // the centre stays a clear bright eye
+  float ld = length(lq);
+  float a = atan(lq.y, lq.x);
+  float sa = abs(fract(a * 1.2732395 + 0.5) - 0.5) * 0.7853982 * ld;   // distance to the nearest of 8 spokes
+  float ws = fwidth(ld);
+  float spokes = (1.0 - smoothstep(0.0, ws * 1.3 + 0.012, sa)) * smoothstep(0.18, 0.4, ld) * 0.55;
+  return mix(max(rings, spokes), 0.3, smoothstep(0.3, 0.7, wr));
+}
+
 // one component's luminous figure: anti-aliased lines where the mode is still
 float figure(vec2 lq, float n, float m, float s, float norm) {
   float val = chladni(lq, vec3(n, m, s)) * norm;
@@ -647,7 +697,10 @@ void main() {
   float code = floor(vB.y + 0.001), prog = fract(vB.y);
   float flags = vD.w;
   float aur = bit(flags, 1.0), slp = bit(flags, 2.0), fls = bit(flags, 4.0), nst = bit(flags, 8.0);
-  float lift = bit(flags, 16.0), lunge = bit(flags, 32.0), old = max(bit(flags, 64.0), step(0.8, age));
+  float lift = bit(flags, 16.0), lunge = bit(flags, 32.0), old = step(0.8, age);
+  float keeper = max(bit(flags, 64.0), 1.0 - step(0.5, vB.z));
+  float goldDeath = max(bit(flags, 128.0), step(0.97, age));
+  bool cling = code > 10.5 && code < 11.5;
   float phase = fract(r * 9173.31 + vB.z * 0.137 + vB.w * 0.071 + vC.x * 0.05);
   float nc = 1.0 + step(0.5, vC.y) + step(0.5, vD.x);
   vec3 cAvg = (vC1 + (nc > 1.5 ? vC2 : vec3(0.0)) + (nc > 2.5 ? vC3 : vec3(0.0))) / nc;
@@ -658,10 +711,12 @@ void main() {
   // the palette is pale (it is also the notebook's); in the dark room it wants more colour
   vec3 c1 = sat(vC1, 1.9), c2 = sat(vC2, 1.9), c3 = sat(vC3, 1.9);
   vec3 cHalo = sat(cAvg, 2.2);
+  const vec3 KEEP = vec3(1.0, 0.86, 0.62);                 // golden white
+  if (keeper > 0.5) { cAvg = KEEP; cHalo = vec3(1.0, 0.80, 0.52); c1 = vec3(1.0, 0.95, 0.85); }
 
   // state shaping
   float scale = 1.0, alpha = 1.0, boost = 0.0, crumble = 0.0;
-  bool born = code > 9.5;
+  bool born = code > 9.5 && code < 10.5;
   bool dying = code > 8.5 && code < 9.5;
   bool falling = code > 7.5 && code < 8.5;
   if (born) { scale = 0.25 + 0.75 * smoothstep(0.2, 1.0, prog); alpha = smoothstep(0.25, 0.85, prog); }
@@ -671,6 +726,7 @@ void main() {
   else if (code > 1.5 && code < 2.5) { boost = sin(prog * 3.14159) * 0.6; }
   else if (code > 2.5 && code < 3.5) { boost = sin(prog * 3.14159) * (0.5 + fls); }
   if (fls > 0.5 && !(code > 2.5 && code < 3.5)) boost += 0.8;
+  if (keeper > 0.5) scale *= 1.0 + 0.05 * sin(uTime * 0.7 + phase * 6.2832);   // she breathes, slowly
 
   float inten = 0.32 + 0.68 * e;
   inten *= 0.88 + 0.12 * sin(uTime * (1.1 + vB.z * 0.12 + vB.w * 0.05) + phase * 6.2832);   // halo pulse, by mode
@@ -678,14 +734,24 @@ void main() {
   inten *= mix(1.0, 0.45 + 0.55 * step(0.32, vnoise1(uTime * 9.0 + phase * 40.0)), hunger);
   if (slp > 0.5) inten *= 0.62 + 0.12 * sin(uTime * 0.7 + phase * 6.2832);
   inten *= 1.0 + 0.15 * lunge + 0.25 * lift + 0.2 * uChoir;
+  if (cling) inten *= 1.08 + 0.1 * sin(uTime * 37.0 + phase * 20.0);
+  if (keeper > 0.5) inten = (0.75 + 0.25 * e) * (0.9 + 0.1 * sin(uTime * 0.7 + phase * 6.2832));
 
   if (uPass == 2) {                       // light on the bronze (plate units)
     float d = length(vQ);
+    if (keeper > 0.5) {                   // she lights a wide, warm stretch of the plate
+      float r0 = 0.17;
+      float x2 = d * d / (r0 * r0);
+      float fall = 1.0 / ((1.0 + x2) * sqrt(1.0 + x2));
+      fall *= 1.0 - smoothstep(0.35, 1.15, d);
+      oC = vec4(vec3(1.0, 0.72, 0.42) * inten * fall * alpha * 1.25, 1.0);
+      return;
+    }
     float r0 = 0.05 * (0.6 + 0.4 * r / 0.045);
     float x2 = d * d / (r0 * r0);
     float fall = 1.0 / ((1.0 + x2) * sqrt(1.0 + x2));
     fall *= 1.0 - smoothstep(0.12, 0.5, d);
-    oC = vec4(sat(cAvg, 1.4) * inten * fall * alpha * (1.0 + boost) * 1.1 * scale, 1.0);
+    oC = vec4(sat(cAvg, 1.4) * inten * fall * alpha * (1.0 + boost) * 1.1 * scale * (cling ? 1.3 : 1.0), 1.0);
     return;
   }
 
@@ -725,10 +791,17 @@ void main() {
   vec3 col = vec3(0.0);
   float halo = exp(-(d * d) / (scale * scale + 1e-3) * 0.62);
   col += cHalo * halo * 0.42 * inten * (1.0 + boost * 1.6);
-  col += cHalo * body * (0.05 + 0.85 * pow(ld, 7.0)) * inten;              // glassy body, brighter rim
+  float rimK = cling ? 1.9 : 0.85;
+  col += cHalo * body * (0.05 + rimK * pow(ld, 7.0)) * inten;              // glassy body, brighter rim
+  if (cling) col += mix(cHalo, vec3(1.0), 0.5) * exp(-pow((ld - 1.0) * 11.0, 2.0)) * 0.55 * inten;
+  if (keeper > 0.5) {
+    // a long, faint halo, and a body of warm light rather than glass
+    col += cHalo * exp(-d * 0.85) * 0.16 * inten * (1.0 - smoothstep(3.6, 5.2, d));
+    col += KEEP * body * (0.16 + 0.3 * (1.0 - ld * ld)) * inten;
+  }
 
   vec2 fq = lq * 0.98;
-  vec3 lines = c1 * figure(fq, vB.z, vB.w, vC.x, vNorm.x);
+  vec3 lines = keeper > 0.5 ? c1 * floorFigure(fq) : c1 * figure(fq, vB.z, vB.w, vC.x, vNorm.x);
   if (nc > 1.5) lines += c2 * figure(fq, vC.y, vC.z, vC.w, vNorm.y);
   if (nc > 2.5) lines += c3 * figure(fq, vD.x, vD.y, vD.z, vNorm.z);
   lines = mix(lines, lines * mix(vec3(1.0), GOLD * 1.3, 0.8), oldT * 0.6);
@@ -760,15 +833,18 @@ void main() {
     col += cAvg * exp(-d * d * 2.0) * smoothstep(0.6, 1.0, prog) * (1.0 - prog) * 1.5;
   }
   if (dying) {                                                              // crumbling grains
-    float goldDeath = step(0.97, age);
-    vec3 cc = mix(cAvg * 0.6, GOLD, goldDeath * 0.7);
-    for (int i = 0; i < 10; i++) {
+    vec3 cc = mix(cAvg * 0.6, GOLD, goldDeath * 0.75);
+    for (int i = 0; i < 14; i++) {
       float fi = float(i);
+      if (fi > 9.5 && goldDeath < 0.5) break;
       float a = phase * 6.2832 + fi * 2.39996;
       vec2 sp = vec2(cos(a), sin(a)) * (0.3 + crumble * (0.9 + 0.8 * hash11(fi + phase * 9.0))) + vec2(0.0, crumble * crumble * 0.8);
       vec2 dq = q - sp;
-      col += cc * exp(-dot(dq, dq) * 90.0) * (1.0 - crumble) * (0.8 + goldDeath * 1.2);
+      float tw = goldDeath > 0.5 ? 0.7 + 0.6 * pow(hash11(fi + floor(uTime * 9.0)), 6.0) : 1.0;
+      col += cc * exp(-dot(dq, dq) * 90.0) * (1.0 - crumble) * (0.8 + goldDeath * 1.2) * tw;
     }
+    // a death of old age leaves a brief warm glow where the body was
+    col += GOLD * goldDeath * exp(-d * d * 1.6) * sin(crumble * 3.14159) * 0.35;
   }
 
   oC = vec4(col * alpha, 1.0);
@@ -879,10 +955,23 @@ uniform float uFloor;
 uniform float uFlash;
 uniform float uBloomK;
 uniform float uFade;       // global fade (boot)
+uniform float uPhono;      // the phonograph is playing: an old film's flicker and grain
+uniform vec2 uAim;         // the spot's aim point (css px)
+uniform float uPlateW;     // plate width (css px)
 uniform int uDebug;        // 0 normal, 1 scene only, 2 bloom only
 ${NOISE}
 vec3 aces(vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+float acesL(float x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+// Per-channel ACES turns bright orange into lemon. Blend it with a hue-keeping curve (tonemap the
+// luminance, keep the ratios, scale down rather than clip), so warm highlights stay copper.
+vec3 tonemap(vec3 x) {
+  x = max(x, 0.0);
+  float l = max(dot(x, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
+  vec3 hp = x * (acesL(l) / l);
+  hp /= max(1.0, max(hp.r, max(hp.g, hp.b)));
+  return mix(aces(x), hp, 0.62);
 }
 void main() {
   vec2 css = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uDpr;
@@ -895,10 +984,11 @@ void main() {
   // the beam: faint shafts in the dusty air, seen from below the lamp
   vec2 d = css - uLamp.xy;
   float r = length(d) / uPoolR;
+  float ra = length(css - uAim) / uPlateW;
   vec2 dirv = d / max(length(d), 1e-3);
   float ang = vnoise(dirv * 9.0 + vec2(uTime * 0.021, -uTime * 0.017)) * 0.55 + vnoise(dirv * 23.0 - vec2(uTime * 0.035, uTime * 0.012)) * 0.45;
   float rays = smoothstep(0.5, 0.95, ang) * exp(-r * 1.8) * smoothstep(0.05, 0.45, r);
-  float haze = exp(-r * r * 1.6);
+  float haze = exp(-ra * ra * 3.2);
   c += vec3(1.0, 0.84, 0.62) * uLightI * (rays * (0.005 + 0.028 * uChoir) + haze * (0.005 + 0.018 * uChoir));
 
   // grade: choir warms everything toward gold; the floor whitens it
@@ -911,13 +1001,24 @@ void main() {
   float vig = 1.0 - smoothstep(0.35, 1.05, length(vq));
   c *= 0.55 + 0.45 * vig;
 
-  c = aces(c * 1.0);
+  c = tonemap(c);
   c = pow(c, vec3(1.0 / 2.2));
   c *= uFade;
 
-  // film grain + dither
+  // phonograph playback: the room remembers itself like an old film. A faint sepia cast, the
+  // projector's uneven flicker, a lifted black and coarser grain. Barely there.
   float gseed = floor(uTime * 24.0);
+  if (uPhono > 0.001) {
+    float fl = vnoise1(uTime * 15.0) * 0.6 + vnoise1(uTime * 41.0 + 7.0) * 0.4;
+    float lum = dot(c, vec3(0.299, 0.587, 0.114));
+    vec3 sep = vec3(lum * 1.07 + 0.012, lum * 0.96 + 0.008, lum * 0.80 + 0.004);
+    c = mix(c, sep, 0.16 * uPhono);
+    c *= 1.0 + (fl - 0.5) * 0.05 * uPhono;
+    c += vec3(0.010, 0.008, 0.005) * uPhono;
+  }
+
+  // film grain + dither
   float gn = hash12(gl_FragCoord.xy + gseed * 37.0) + hash12(gl_FragCoord.xy * 1.37 - gseed * 11.0) - 1.0;
-  c += gn * (0.018 + 0.012 * (1.0 - c.g)) * 0.6;
+  c += gn * (0.018 + 0.012 * (1.0 - c.g)) * (0.6 + 0.45 * uPhono);
   oC = vec4(c, 1.0);
 }`;

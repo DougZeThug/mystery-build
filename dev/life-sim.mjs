@@ -1,8 +1,12 @@
 // Headless ecosystem harness for the singers. Runs scripted scenarios far faster than real time
 // against the real field and sand, and prints a timeline.
-//   node dev/life-sim.mjs [scenario|all] [--seed N] [--every S] [--sandEvery K] [--quiet]
+//   node dev/life-sim.mjs [scenario|all] [--seed N] [--every S] [--sandEvery K] [--grains G] [--quiet]
 // Scenarios: a (one held note, then silence), b (clan against clan), c (fusion), d (long drift),
-//            e (choir & floor), f (darkness)
+//            e (choir & floor -> the keeper), f (darkness), h (resting finger), o (over-bowing),
+//            first / first45 (first-birth pacing at bow amp .8 / .45), k (the keeper, directly),
+//            cl (clinging under a loud fixed note, with a damper)
+// The harness mirrors progress.js: state.stats.births counts 'mote:birth', and the Floor drive
+// (18 s) ends with bus 'floor:end'. Grains default to 20000, as in the app.
 import { bus } from '../src/core/bus.js';
 import { makeRng } from '../src/core/rng.js';
 import { newState } from '../src/core/persist.js';
@@ -18,13 +22,14 @@ const which = args.find((a) => !a.startsWith('--') && !/^\d+$/.test(a)) || 'all'
 const SEED = +opt('seed', 7);
 const EVERY = +opt('every', 10);
 const QUIET = flag('quiet');
+const GRAINS = +opt('grains', 20000);
 
-export function makeGame(seed = SEED) {
+export function makeGame(seed = SEED, grains = GRAINS) {
   const state = newState();
   const rng = makeRng(seed);
   const field = createField({ state, bus, rng });
   const sand = createSand(field, { state, bus });
-  sand.seedScatter(15000);
+  sand.seedScatter(grains);
   const game = {
     t: 0, dt: 1 / 30, rng, bus, debug: false, state, field, sand,
     light: { on: true, level: 1, flicker: 0 }, fx: { choir: 0, floor: 0 }, hold: null,
@@ -35,14 +40,22 @@ export function makeGame(seed = SEED) {
 }
 
 // phases: [{ dur, bow?: modeId | [modeIds], amp?, light?, hold?: {u,v}, note? }]
-export function run(name, phases, { seed = SEED, every = EVERY, sandEvery = 1, quiet = QUIET, onTick = null } = {}) {
-  const game = makeGame(seed);
+export function run(name, phases, { seed = SEED, every = EVERY, sandEvery = 1, quiet = QUIET, onTick = null, grains = GRAINS } = {}) {
+  const game = makeGame(seed, grains);
   const { field, sand, life } = game;
   const dt = 1 / 30;
   const win = { births: 0, splits: 0, deaths: 0, age: 0, hunger: 0, eaten: 0, fall: 0, fusions: 0, devoured: 0, newSp: 0, extinct: 0 };
-  const tot = { ...win, choirs: 0, floors: 0, firstBirth: null, firstFusion: null, firstEat: null, hybrids: new Set(), species: new Set(), extinctNames: [], newNames: [] };
+  const tot = { ...win, choirs: 0, floors: 0, firstBirth: null, firstFusion: null, firstEat: null, hybrids: new Set(), species: new Set(), extinctNames: [], newNames: [],
+    birthTimes: [], clings: 0, throws: 0, keeperAt: null };
   const offs = [
-    bus.on('mote:birth', (e) => { win.births++; tot.births++; if (tot.firstBirth === null) tot.firstBirth = game.t; }),
+    bus.on('mote:birth', (e) => {
+      win.births++; tot.births++; game.state.stats.births++;             // as progress.js does
+      if (tot.firstBirth === null) tot.firstBirth = game.t;
+      if (tot.birthTimes.length < 6) tot.birthTimes.push(+game.t.toFixed(1));
+    }),
+    bus.on('mote:cling', () => { tot.clings++; }),
+    bus.on('mote:throw', () => { tot.throws++; }),
+    bus.on('keeper:arrive', (e) => { tot.keeperAt = +game.t.toFixed(1); if (!quiet) console.log(`   ${fmt(game.t)}  ** THE KEEPER: ${e.species.name} at (${e.mote.u.toFixed(2)}, ${e.mote.v.toFixed(2)})`); }),
     bus.on('mote:split', () => { win.splits++; tot.splits++; }),
     bus.on('mote:death', (e) => { win.deaths++; tot.deaths++; win[e.cause]++; tot[e.cause]++; }),
     bus.on('mote:fuse', (e) => { win.fusions++; tot.fusions++; if (tot.firstFusion === null) tot.firstFusion = game.t; if (e.species.nc > 1) tot.hybrids.add(e.species.name); }),
@@ -76,7 +89,7 @@ export function run(name, phases, { seed = SEED, every = EVERY, sandEvery = 1, q
         field.setSource('bow', [{ mode: bows[idx], amp: ph.amp ?? 0.8 }]);
       } else field.setSource('bow', []);
       if (ph.fn) ph.fn(game, s * dt);
-      if (floorLeft > 0) { floorLeft -= dt; if (floorLeft <= 0) field.setSource('floor', []); }
+      if (floorLeft > 0) { floorLeft -= dt; if (floorLeft <= 0) { field.setSource('floor', []); bus.emit('floor:end', {}); } }
       field.setSource('chorus', life.chorus());
       field.update(dt);
       if (step % sandEvery === 0) sand.update(dt * sandEvery);
@@ -113,7 +126,8 @@ export function run(name, phases, { seed = SEED, every = EVERY, sandEvery = 1, q
   }
   const summary = {
     name, seed, simSeconds: Math.round(game.t), wallSeconds: +secs.toFixed(1), pop: life.motes.length, popMin: popMin === 1e9 ? 0 : popMin, popMax,
-    firstBirth: tot.firstBirth === null ? null : +tot.firstBirth.toFixed(1), firstFusion: tot.firstFusion && +tot.firstFusion.toFixed(1),
+    firstBirth: tot.firstBirth === null ? null : +tot.firstBirth.toFixed(1), birthTimes: tot.birthTimes, firstFusion: tot.firstFusion && +tot.firstFusion.toFixed(1),
+    clings: tot.clings, throws: tot.throws, keeperAt: tot.keeperAt,
     firstEat: tot.firstEat && +tot.firstEat.toFixed(1),
     births: tot.births, splits: tot.splits, deaths: tot.deaths, age: tot.age, hunger: tot.hunger, eaten: tot.eaten, fell: tot.fall,
     fusions: tot.fusions, devoured: tot.devoured, choirs: tot.choirs, floors: tot.floors,
@@ -180,6 +194,27 @@ export const SCENARIOS = {
     { dur: 50, bow: '1.3+', amp: 0.8, note: 'bow k10' },
     { dur: 30, hold: { u: 0.3, v: -0.3 }, note: 'finger rests at (.3,-.3)' },
     { dur: 20, note: 'release' },
+  ],
+  // first births: a steady bow from a fresh plate (the first-minute experience)
+  first: () => [
+    { dur: 40, bow: '2.5-', amp: 0.8, note: 'bow 2.5- (k29) at .8 from a fresh plate' },
+  ],
+  first45: () => [
+    { dur: 40, bow: '2.5-', amp: 0.45, note: 'bow 2.5- (k29) at .45 from a fresh plate' },
+  ],
+  // the keeper, directly: a short Floor drive and its end
+  k: () => [
+    { dur: 40, bow: '1.3+', amp: 0.8, note: 'bow k10' },
+    { dur: 1, fn: (g, t) => { if (t === 0) bus.emit('life:floor', { on: true }); }, note: 'the Floor (forced)' },
+    { dur: 50, note: 'silence (floor runs 18 s, then the keeper)' },
+    { dur: 20, hold: { u: -0.2, v: 0.3 }, note: 'finger rests at (-.2,.3)' },
+    { dur: 60, note: 'release; she returns to the rim' },
+  ],
+  // clinging: a loud fixed note, then a wandering bow with a damper on the plate
+  cl: () => [
+    { dur: 40, bow: '1.3+', amp: 0.8, note: 'bow k10' },
+    { dur: 10, bow: '2.3+', amp: 1.15, note: 'a different loud note (they cling, then find its lines)' },
+    { dur: 15, note: 'silence' },
   ],
   // over-bowing: fast, violent, wandering bow
   o: () => [

@@ -21,6 +21,12 @@ const LM_EXT = 1.25;          // ... covering plate units [-1.25, 1.25]
 const DUST_N = 150;
 const MAX_SINGERS = 64;
 
+// Canonical singer state codes and flag bits as the shaders read them. life.js owns the real
+// encoding (STATES / FLAG); instance data is remapped to these names every frame, so a reordered
+// or extended list on the life side cannot scramble the look.
+const CANON_STATES = ['walk', 'feed', 'split', 'fuse', 'eat', 'startle', 'sleep', 'nestle', 'fall', 'die', 'born', 'cling'];
+const CANON_FLAGS = { aurata: 1, sleep: 2, flash: 4, nestle: 8, float: 16, lunge: 32, keeper: 64, gold: 128 };
+
 const clamp01 = (x) => (x > 0 ? (x < 1 ? x : 1) : 0);
 const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
 const num = (x, d = 0) => (Number.isFinite(x) ? x : d);
@@ -56,6 +62,14 @@ export function createRenderer(canvas, game) {
     setEngravings(lines, floor) { engr.lines = lines || null; engr.floor = floor || null; engravingsDirty = true; },
     info() { return info; },
     debug(n) { debugMode = n | 0; },
+    // The spotlight as the renderer draws it (CSS px), for overlays that want to sit in the same
+    // light: lamp position/height, the aim point of the beam, and pool(x, y) -> 0..1 falloff.
+    lamp: { x: 0, y: 0, z: 1, aimX: 0, aimY: 0, size: 1, poolR: 1 },
+    pool(x, y) {
+      const L = api.lamp;
+      const d = Math.hypot(x - L.aimX, y - L.aimY) / Math.max(1, L.size);
+      return (0.8 * Math.exp(-d * d * 5.4) + 0.2 * Math.exp(-d * d * 1.75)) * (1 - smooth(0.78, 1.35, d));
+    },
   };
   let debugMode = 0;
   let engravingsDirty = true;
@@ -88,8 +102,60 @@ export function createRenderer(canvas, game) {
     let fieldVer = -1, fieldG = 0, sandVer = -1, sandD = 0, wearVer = -1;
     const ckBox = [0, 0, -1, -1], ckBB = [0, 0, -1, -1];
     let ckSig = NaN, ckAt = -1, ckBuf = null, ckDist = null, ckW = null, ckGold = null, ckHeal = null;
-    let engrOn = 0, floorEngr = 0, lastT = 0;
+    let engrOn = 0, floorEngr = 0, lastT = 0, phonoK = 0;
     let fontsAsked = false, keeperSig = '', keeperAt = -10;
+    // singer instances, remapped to the canonical codes (see CANON_STATES / CANON_FLAGS)
+    let instLocal = new Float32Array(MAX_SINGERS * 16);
+    const stateMap = new Float32Array(32);
+    const flagMap = new Float32Array(16);           // life bit index -> canonical bit value
+    let mapStates = null, mapFlags = null;
+    const dampArr = new Float32Array(24);
+
+    function buildMaps(life) {
+      const S = life && Array.isArray(life.STATES) ? life.STATES : null;
+      if (S !== mapStates) {
+        mapStates = S;
+        for (let i = 0; i < 32; i++) {
+          const name = S ? S[i] : CANON_STATES[i];
+          const c = CANON_STATES.indexOf(name);
+          stateMap[i] = c >= 0 ? c : (S ? 0 : i);
+        }
+      }
+      const F = life && life.FLAG && typeof life.FLAG === 'object' ? life.FLAG : null;
+      if (F !== mapFlags) {
+        mapFlags = F;
+        for (let b = 0; b < 16; b++) flagMap[b] = F ? 0 : (b < 8 ? 1 << b : 0);
+        if (F) {
+          for (const [name, val] of Object.entries(F)) {
+            const v = val | 0;
+            if (!(v > 0) || (v & (v - 1))) continue;          // single bits only
+            const b = Math.round(Math.log2(v));
+            if (b >= 16) continue;
+            let c = CANON_FLAGS[name] || 0;
+            if (!c && /keeper/i.test(name)) c = 64;
+            else if (!c && /gold|crumble|agedeath|death/i.test(name)) c = 128;
+            flagMap[b] = c;                               // unknown names (e.g. 'old') are dropped
+          }
+        }
+      }
+    }
+    function remapInstances(src, count, life) {
+      buildMaps(life);
+      if (instLocal.length < count * 16) instLocal = new Float32Array(count * 16);
+      const dst = instLocal;
+      for (let i = 0; i < count; i++) {
+        const o = i * 16;
+        for (let k = 0; k < 16; k++) dst[o + k] = src[o + k];
+        const st = num(src[o + 5]);
+        const code = Math.max(0, Math.min(31, Math.floor(st + 1e-4)));
+        dst[o + 5] = stateMap[code] + Math.min(0.99, Math.max(0, st - code));
+        const fl = num(src[o + 15]) | 0;
+        let out = 0;
+        for (let b = 0; b < 16; b++) if (fl & (1 << b)) out |= flagMap[b];
+        dst[o + 15] = out;
+      }
+      return dst;
+    }
 
     function init() {
       lost = false;
@@ -480,10 +546,32 @@ export function createRenderer(canvas, game) {
       const sa = shake * 5;
       const cx = v.plate.cx + sa * (Math.sin(t * 71.3) + Math.sin(t * 43.7 + 1.3)) * 0.5;
       const cy = v.plate.cy + sa * (Math.cos(t * 67.1) + Math.sin(t * 51.9 + 0.4)) * 0.5;
-      // the lamp hangs a little up and left of the plate's centre, swaying almost imperceptibly
-      const lx = v.plate.cx - size * 0.08 + Math.sin(t * 0.31) * size * 0.004;
-      const ly = v.plate.cy - size * 0.14 + Math.cos(t * 0.23) * size * 0.003;
+      // the lamp hangs a little up and left of the plate's centre, swaying almost imperceptibly; its
+      // beam is aimed just above the plate's centre
+      const swx = Math.sin(t * 0.31) * size * 0.004, swy = Math.cos(t * 0.23) * size * 0.003;
+      const lx = v.plate.cx - size * 0.08 + swx;
+      const ly = v.plate.cy - size * 0.14 + swy;
       const lz = size * 1.6, poolR = size * 0.9;
+      const ax = v.plate.cx - size * 0.03 + swx * 1.4, ay = v.plate.cy - size * 0.06 + swy * 1.4;
+      const LA = api.lamp;
+      LA.x = lx; LA.y = ly; LA.z = lz; LA.aimX = ax; LA.aimY = ay; LA.size = size; LA.poolR = poolR;
+      // phonograph playback (eases in and out)
+      const ph = game.field?.getSource?.('phono');
+      let phOn = 0;
+      if (Array.isArray(ph)) for (const c of ph) if (num(c?.amp) > 0.02) { phOn = 1; break; }
+      phonoK += (phOn - phonoK) * Math.min(1, dt * (phOn ? 0.8 : 1.5));
+      // felt dampers on the plate (the moth is not felt)
+      dampArr.fill(0);
+      const dl = game.field?.dampers;
+      if (Array.isArray(dl)) {
+        let n = 0;
+        for (const d of dl) {
+          if (n >= 6) break;
+          if (!d || d.moth || !Number.isFinite(d.u) || !Number.isFinite(d.v)) continue;
+          dampArr[n * 4] = d.u; dampArr[n * 4 + 1] = d.v; dampArr[n * 4 + 2] = Math.max(0.03, num(d.r, 0.06)) * 1.03; dampArr[n * 4 + 3] = 1;
+          n++;
+        }
+      }
 
       // darkness reveals the phosphor marks slowly; light hides them quickly
       const dark = Lt.on === false ? 1 : 0;
@@ -505,8 +593,9 @@ export function createRenderer(canvas, game) {
           gl.bufferData(gl.ARRAY_BUFFER, instCap * 64, gl.DYNAMIC_DRAW);
         }
         if (count > 0) {
+          const data = remapInstances(inst.data, count, game.life);
           gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
-          gl.bufferSubData(gl.ARRAY_BUFFER, 0, inst.data, 0, count * 16);
+          gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, count * 16);
         }
       }
 
@@ -553,6 +642,8 @@ export function createRenderer(canvas, game) {
       gl.uniform2f(Pc.u.uCkTexel, 1 / ckSize, 1 / ckSize);
       gl.uniform2f(Pc.u.uEnTexel, 1 / enSize, 1 / enSize);
       gl.uniform2f(Pc.u.uWearTexel, 1 / (game.WEAR || 128), 1 / (game.WEAR || 128));
+      gl.uniform2f(Pc.u.uAim, ax, ay);
+      if (Pc.u.uDamp) gl.uniform4fv(Pc.u.uDamp, dampArr);
       bind(0, T.matA); bind(1, T.matB); bind(2, T.felt); bind(3, T.field); bind(4, T.sand);
       bind(5, T.wear); bind(6, T.crack); bind(7, T.engr); bind(8, R.lm.tex);
       drawFull(R.scene);
@@ -577,8 +668,8 @@ export function createRenderer(canvas, game) {
         gl.useProgram(Pd.p);
         gl.uniform2f(Pd.u.uRes, sceneW, sceneH);
         gl.uniform1f(Pd.u.uDpr, sdpr);
-        gl.uniform3f(Pd.u.uLamp, lx, ly, lz);
-        gl.uniform1f(Pd.u.uPoolR, poolR);
+        gl.uniform3f(Pd.u.uLamp, ax, ay, lz);
+        gl.uniform1f(Pd.u.uPoolR, size * 0.72);
         gl.uniform1f(Pd.u.uTime, t);
         gl.uniform1f(Pd.u.uLightI, lightI * (1 + 0.6 * choir));
         gl.bindVertexArray(vaoEmpty);
@@ -616,6 +707,9 @@ export function createRenderer(canvas, game) {
       gl.uniform1f(Pq.u.uFlash, flash);
       gl.uniform1f(Pq.u.uBloomK, 0.65 + 0.55 * choir + 0.25 * floorFx);
       gl.uniform1f(Pq.u.uFade, Math.min(1, t / 0.6));
+      gl.uniform1f(Pq.u.uPhono, phonoK);
+      gl.uniform2f(Pq.u.uAim, ax, ay);
+      gl.uniform1f(Pq.u.uPlateW, size);
       gl.uniform1i(Pq.u.uDebug, debugMode);
       bind(0, R.scene.tex); bind(1, R.a1.tex); bind(2, R.b1.tex);
       drawFull(null);

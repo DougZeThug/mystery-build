@@ -8,12 +8,18 @@ import { distToPolyline } from './field.js';
 import { nameFor, noteFor, colourFor, speciesRatioText, numberWord } from './naming.js';
 
 // Renderer encoding: instance 'state' float = code + progress (0..0.99) through the state.
-export const STATES = ['walk', 'feed', 'split', 'fuse', 'eat', 'startle', 'sleep', 'nestle', 'fall', 'die', 'born'];
+// 'cling' (11) is a mote state only: in instanceData a clinging singer is written as 'startle' (5)
+// with progress = 0.6·grip left (so the shader's shiver grows as its hold fails) plus FLAG.cling.
+export const STATES = ['walk', 'feed', 'split', 'fuse', 'eat', 'startle', 'sleep', 'nestle', 'fall', 'die', 'born', 'cling'];
 export const STATE_CODE = Object.freeze(Object.fromEntries(STATES.map((s, i) => [s, i])));
-// instance flags (bits): aurata, sleeping, fused-flash, nestle, floating (choir/floor), lunging, old
-export const FLAG = Object.freeze({ aurata: 1, sleep: 2, flash: 4, nestle: 8, float: 16, lunge: 32, old: 64 });
+// instance flags (bits): aurata 1, sleeping 2, fused-flash 4, nestle 8, floating (choir/floor) 16,
+// lunging 32, the keeper 64, dying of old age 128 (only in the 'die' state), clinging 256,
+// old (age > 0.8·life) 512. The renderer may also derive 'old' from age01 >= 0.8.
+export const FLAG = Object.freeze({ aurata: 1, sleep: 2, flash: 4, nestle: 8, float: 16, lunge: 32, keeper: 64,
+  ageDeath: 128, cling: 256, old: 512 });
+export const KEEPER_ID = 'keeper';
 
-const DUR = { born: 1.2, split: 0.9, fuse: 1.7, flash: 0.9, eat: 0.8, startle: 0.55, fall: 1.2,
+const DUR = { born: 1.2, split: 0.9, fuse: 1.7, flash: 0.9, eat: 0.8, startle: 0.55, thrown: 0.8, fall: 1.2,
   dieAge: 1.5, dieHunger: 1.0, dieEaten: 0.6 };
 
 // All the numbers that shape the ecosystem (tuned with dev/life-sim.mjs). Mutable for harnesses.
@@ -25,7 +31,13 @@ export const TUNE = {
   songWaver: 0.08,      // ...but the plate's own song wavers: chance a song-born singer is a neighbouring mode
   songCrowd: 48,        // and it quickens mostly when the plate is sparse (rate × (1 - N/songCrowd)^1.5)
   gestation: 23,        // seconds of strong, coherent song to quicken a singer of a new mode
+  gestationFew: 17,     // ...while fewer than earlyKinds species are known (the first minutes)
+  earlyKinds: 3,
   familiar: 2.6,        // a mode whose species is already alive quickens this much faster
+  // the very first singers: a newcomer will not hold a bow for half a minute. While fewer than
+  // earlyBirths singers have been born (state.stats.births), a steady bowed figure quickens one in
+  // about earlyGestation seconds at full strength (strength = (total - earlyFrom) / earlyRange)
+  earlyBirths: 3, earlyStable: 1.6, earlyGestation: 7.4, earlyFrom: 0.2, earlyRange: 0.3,
   quickDrop: 0.42,      // quickening spent by each birth
   quickDecay: 0.05,     // per second while the plate is incoherent
   newbornE: 0.55,
@@ -35,6 +47,7 @@ export const TUNE = {
   feedGain: 0.1,         // dE/dt from agreeable sound (soft-saturated feed)
   harm: 0.55,            // ...and from disagreeable sound, relative (discord starves more slowly than harmony feeds)
   selfExclude: 0.55,     // share of a species' own song it cannot live on
+  hearMax: 0.8,          // a mode louder than this feeds (or starves) them no more than this
   beat: 0.5, beatFrom: 10, beatScale: 12,   // a crowded pitch beats: unison value 1 - beat·(voices - from)/scale
   metab: 0.0075, metabBase: 0.45, metabSlope: 1.0,   // metabolism = metab·(base + slope·e): bright singers burn faster
   ageCost: 0.004, crowdK: 21, crowdStress: 0.06, stillPenalty: 0.45, detunePenalty: 9,
@@ -45,7 +58,17 @@ export const TUNE = {
   // fusion / predation
   fuseCons: 0.25, fuseE: 0.6, fuseRate: 0.35, eatCons: -0.3, eatGain: 0.55, huntE: 0.93, grace: 3,
   // motion
-  speedMin: 0.035, speedMax: 0.09, startleFA: 0.55, overdriveA: 0.95, rBase: 0.038, rComp: 0.008,
+  speedMin: 0.035, speedMax: 0.09, overdriveA: 0.95, rBase: 0.038, rComp: 0.008,
+  // violence: at a strong antinode (V = F·A + clingOver·overdrive > clingV) a singer first CLINGS
+  // (trembling, creeping toward stillness). Its grip (clingBase + clingE·e seconds) drains only
+  // while the player drives the plate; when it runs out the singer is THROWN (the only way to fall).
+  // Near a resting finger, a landed moth or a felt damper a singer never loses its grip.
+  clingV: 0.55, clingOver: 0.5, clingCalm: 0.45, clingCreep: 0.45, braceHarm: 0.35,
+  clingBase: 1.6, clingE: 2.4, clingDrain: 0.7, clingDrainV: 0.6, clingRegen: 0.3, clingDazed: 0.35,
+  throwBase: 0.6, throwV: 0.9, throwOver: 0.6, shelterHold: 0.26, shelterDamper: 0.15,
+  // the keeper (after the first Floor): one, immortal, walks the rim
+  keeperR: 2.2, keeperSpeed: 0.028, keeperRun: 0.11, keeperRim: 0.8, keeperDelay: 2.5, keeperBorn: 4.5,
+  keeperReach: 0.25, keeperComfort: 0.015, keeperWait: 8, keeperGlow: 0.86,
   // rare states
   choirMin: 3, choirPop: 12, choirCons: 0.1, choirHold: 5, choirLen: 34, choirCool: 600, choirBreak: 3,
   floorKs: [5, 10, 20, 40], floorHold: 6, floorCool: 150,
@@ -102,6 +125,11 @@ export function createLife(game) {
 
   // births
   let quick = 0, quickMode = null, birthGap = 0;
+  let sandBirths = 0;          // singers this plate has quickened from sand (mirror of state.stats.births)
+  let kindsKnown = -1;         // species records, the keeper aside (refreshed in upkeepRecords)
+  let drivenNow = false;       // is the player (bow, fork, phonograph) driving the plate this step?
+  // the keeper
+  let keeperMote = null, keeperSp = null, keeperDue = -1;
   // rare states
   let choirOn = false, choirT = 0, choirBreakT = 0, choirCool = 20, choirSince = 0;
   const choirIds = [];
@@ -131,7 +159,7 @@ export function createLife(game) {
   function getSpecies(compsIn, aurata = false, meta = null) {
     const comps = normComps(compsIn);
     if (!comps.length) return null;
-    const id = speciesId(comps, aurata);
+    const id = meta?.id || speciesId(comps, aurata);
     let sp = species[id];
     if (sp) return sp;
     const ms = comps.map(modeById);
@@ -239,6 +267,7 @@ export function createLife(game) {
           lifeSum: 0, mutants: 0, returns: 0, nestles: 0, choirs: 0 },
       };
       refreshNote(r, sp);
+      kindsKnown = -1;
     }
     if (r && !r.stats) r.stats = { births: 0, splits: 0, fusions: 0, devoured: 0, eaten: 0, fell: 0, ageDeaths: 0,
       hungerDeaths: 0, lifeSum: 0, mutants: 0, returns: 0, nestles: 0, choirs: 0 };
@@ -278,6 +307,8 @@ export function createLife(game) {
       vig: 0.78 + rng.next() * 0.44,   // vigour: some feed better than others, so hunger thins rather than ends a kind
       flash: 0, lunge: 0, hunt: null, huntD: 9, ou: 0, ov: 0, oa: 0, or: 0, nest: false, f: 0, F: 0, near: 0,
       sx: 0, sy: 0, lsx: 0, lsy: 0, near0: 0, gather: 0, cx: 0, cy: 0, dead: false, ring: 0, _flags: 0,
+      grip: TUNE.clingBase + TUNE.clingE * clamp(e, 0, 1), calm: 0, thrown: false, shelter: false, comfort: 0,
+      keeper: false,
     };
     motes.push(m);
     return m;
@@ -286,7 +317,7 @@ export function createLife(game) {
   function setState(m, s, dur = 0) { m.state = s; m.st = 0; m.dur = dur; }
 
   function die(m, cause) {
-    if (m.state === 'die' || m.state === 'fall') return;
+    if (m.keeper || m.state === 'die' || m.state === 'fall') return;
     m.cause = cause;
     setState(m, 'die', cause === 'age' ? DUR.dieAge : cause === 'eaten' ? DUR.dieEaten : DUR.dieHunger);
     m.hunt = null;
@@ -334,9 +365,11 @@ export function createLife(game) {
     for (const sp of alive) { sp.n = 0; sp.sumE = 0; sp.su = 0; sp.sv = 0; }
     alive.length = 0;
     N = 0;
+    if (keeperSp) keeperSp.n = 0;
     for (const m of motes) {
       if (m.dead || m.state === 'die' || m.state === 'fall') continue;
       const sp = m.spec;
+      if (m.keeper) { sp.n = 1; sp.sumE = m.e; sp.su = m.u; sp.sv = m.v; continue; }   // she sings nothing into the plate and counts for no choir
       if (sp.n === 0) { sp.sumE = 0; sp.su = 0; sp.sv = 0; alive.push(sp); }
       sp.n++; sp.sumE += m.e; sp.su += m.u; sp.sv += m.v; N++;
     }
@@ -383,7 +416,8 @@ export function createLife(game) {
   function computeFeed(fromChorus) {
     actN = 0;
     for (let i = 0; i < NM; i++) {
-      const a = fromChorus ? chorusAmp[i] : (field.ampIndex ? field.ampIndex(i) : field.amp(MODES[i].id));
+      let a = fromChorus ? chorusAmp[i] : (field.ampIndex ? field.ampIndex(i) : field.amp(MODES[i].id));
+      if (a > TUNE.hearMax) a = TUNE.hearMax;          // past a certain loudness they hear no more (and starve no faster)
       if (a > 0.003) { actIdx[actN] = i; actAmp[actN] = a; actN++; }
     }
     // a crowded note is never quite in tune: many voices on one pitch beat against one another,
@@ -415,7 +449,7 @@ export function createLife(game) {
     const n = motes.length;
     for (let i = 0; i < n; i++) {
       const m = motes[i];
-      m.near0 = m.near; m.sx = 0; m.sy = 0; m.near = 0; m.cx = 0; m.cy = 0;
+      m.near0 = m.near; m.sx = 0; m.sy = 0; m.near = 0; m.cx = 0; m.cy = 0; m.comfort = 0;
       if (m.hunt && (m.hunt.dead || !FREE[m.hunt.state])) m.hunt = null;
       m.huntD = m.hunt ? Math.hypot(m.hunt.u - m.u, m.hunt.v - m.v) * 0.8 : 9;   // stickiness
     }
@@ -429,6 +463,15 @@ export function createLife(game) {
         const d2 = dx * dx + dy * dy;
         if (d2 > 0.16) continue;                   // 0.4²
         const d = Math.sqrt(d2) + 1e-6, ux = dx / d, uy = dy / d;
+        if (a.keeper || b.keeper) {
+          // the keeper: heavy (the others make room, she does not), never hunted, never courted;
+          // near her the others take a little comfort
+          const o = a.keeper ? b : a, sg = a.keeper ? 1 : -1;
+          const rr = a.r + b.r;
+          if (d < rr * 1.5) { const k = 1 - d / (rr * 1.5); o.sx += ux * sg * k * k * 3.2; o.sy += uy * sg * k * k * 3.2; }
+          if (d < TUNE.keeperReach) o.comfort = Math.max(o.comfort, 1 - d / TUNE.keeperReach);
+          continue;
+        }
         if (d < 0.12) {
           a.near++; b.near++;
           a.cx += dx; a.cy += dy; b.cx -= dx; b.cy -= dy;
@@ -536,7 +579,7 @@ export function createLife(game) {
   }
 
   // --- one singer, one step -------------------------------------------------------------------
-  let A = 0, Aslow = 0, Ajump = 0, overdrive = 0, darkNow = false, crowdMul = 1, detuneMul = 1;
+  let A = 0, Aslow = 0, Ajump = 0, overdrive = 0, darkNow = false, crowdMul = 1, detuneMul = 1, keeperFirst = false;
 
   function startle(m, strength, ax, ay) {
     let dx = ax + gauss() * 0.3, dy = ay + gauss() * 0.3;
@@ -547,9 +590,147 @@ export function createLife(game) {
     if (m.nest) m.nest = false;
   }
 
+  // how long a singer can hold on at a violent spot: the strong hold longer
+  function gripMax(m) { return TUNE.clingBase + TUNE.clingE * clamp(m.e, 0, 1); }
+
+  // near a resting finger, a landed moth or a felt damper nothing is ever thrown
+  function shelterAt(u, v) {
+    const h = game.hold;
+    if (h && Math.abs(u - h.u) < TUNE.shelterHold && Math.abs(v - h.v) < TUNE.shelterHold &&
+        Math.hypot(u - h.u, v - h.v) < TUNE.shelterHold) return true;
+    if (moth && Math.hypot(u - moth.u, v - moth.v) < TUNE.shelterHold) return true;
+    const ds = field.dampers;
+    if (ds && ds.length) for (const d of ds) if (Math.hypot(u - d.u, v - d.v) < (d.r || 0.06) + TUNE.shelterDamper) return true;
+    return false;
+  }
+
+  // the grip has failed: flung, mostly outward and away from the loudness. Near the rim that is
+  // the edge; further in it lands dazed (a little grip back) and will cling again if it must.
+  function throwMote(m, V) {
+    const gl = Math.hypot(SGU, SGV) || 1, sg = SF > 0 ? -1 : 1;
+    const rr = Math.hypot(m.u, m.v) || 1, a = rng.next() * TAU;
+    const ax = 0.45 * Math.cos(a) + 0.35 * sg * SGU / gl + m.u / rr, ay = 0.45 * Math.sin(a) + 0.35 * sg * SGV / gl + m.v / rr;
+    startle(m, TUNE.throwBase + TUNE.throwV * clamp(V - TUNE.clingV, 0, 1) + TUNE.throwOver * overdrive, ax, ay);
+    m.dur = DUR.thrown; m.thrown = true; m.scool = DUR.thrown + 0.6;
+    m.grip = gripMax(m) * TUNE.clingDazed;
+    bump(m.spec, 'thrown');
+    bus.emit('mote:throw', { mote: m });
+  }
+
+  // --- the keeper -----------------------------------------------------------------------------
+  // After the first Floor, one singer stands up out of the bare bronze at the centre: the
+  // fundamental's own creature. She sings nothing into the plate, never eats, fades, fuses or falls,
+  // walks the rim clockwise with pauses, and comes first to a still finger.
+  function keeperSpecies() {
+    if (keeperSp) return keeperSp;
+    keeperSp = species[KEEPER_ID] || getSpecies(['floor'], false, { id: KEEPER_ID, gen: 0, parents: null });
+    keeperSp.keeper = true;
+    return keeperSp;
+  }
+  // the path she keeps: a rounded square just inside the rim (clockwise on screen = angle rising)
+  let RPU = 0, RPV = 0;
+  function rimPoint(th) {
+    const c = Math.cos(th), s = Math.sin(th), R = TUNE.keeperRim;
+    RPU = R * Math.sign(c) * Math.pow(Math.abs(c), 0.25); RPV = R * Math.sign(s) * Math.pow(Math.abs(s), 0.25);
+  }
+  function summonKeeper(fresh, u = 0, v = 0) {
+    if (keeperMote && !keeperMote.dead) return keeperMote;
+    const sp = keeperSpecies();
+    if (!fresh && u === 0 && v === 0) { rimPoint(rng.next() * TAU); u = RPU; v = RPV; }
+    const m = makeMote(sp, u, v, 0.95, 0, fresh ? 'born' : 'walk');
+    m.keeper = true; m.life = 1e9; m.dur = fresh ? TUNE.keeperBorn : 0; m.grace = 1e9; m.vig = 1;
+    m.r = TUNE.rBase * TUNE.keeperR * (fresh ? 0.5 : 1); m.walkT = 4 + rng.next() * 4;
+    keeperMote = m;
+    state.seen ||= {};
+    state.seen.keeper = true; delete state.seen.keeperDue;
+    keeperDue = -1;
+    const isNew = announce(sp, !fresh);
+    const r = recordFor(sp);
+    r.keeper = true; r.count = 1; r.peak = Math.max(1, r.peak || 0); r.extinct = false; r.extinctAt = null;
+    if (fresh) { bump(sp, 'births'); refreshNote(r, sp); bus.emit('keeper:arrive', { mote: m, species: sp, isNew }); }
+    aggregate();
+    return m;
+  }
+
+  function stepKeeper(m, dt) {
+    m.st += dt; m.age += dt;                           // she keeps time, but does not age
+    if (m.flash > 0) m.flash -= dt;
+    const R0 = TUNE.rBase * TUNE.keeperR;
+    m.e = 0.92 + 0.06 * Math.sin(T * 0.37 + m.phase * TAU);
+    if (m.state === 'born') {                          // a slow bloom out of the bare bronze
+      const k = clamp(m.st / m.dur, 0, 1);
+      m.r = R0 * (0.5 + 0.5 * k * k * (3 - 2 * k));
+      if (m.st >= m.dur) { setState(m, 'feed'); m.walkT = 2.5 + rng.next() * 1.5; const a = rng.next() * TAU; m.hx = Math.cos(a); m.hy = Math.sin(a); }
+      m._flags = 0;
+      return;
+    }
+    m.r = R0;
+    const h = game.hold;
+    let tu, tv, want = 0, turnRate = 1.6;
+    const pace = TUNE.keeperSpeed * (darkNow ? 0.6 : 1);
+    if (h && !floorOn) {
+      // the still finger: she goes to it first, from anywhere, and sits against it
+      const ang = Math.atan2(m.v - h.v, m.u - h.u);
+      const R = 0.075 + R0 * 0.8;
+      tu = h.u + Math.cos(ang) * R; tv = h.v + Math.sin(ang) * R;
+      steer(m, tu, tv);
+      if (STD < 0.025 || (m.state === 'nestle' && STD < 0.06)) {
+        if (m.state !== 'nestle') { setState(m, 'nestle'); bump(m.spec, 'nestles'); }
+        const k = Math.min(1, dt * 1.5);
+        m.u += (tu - m.u) * k; m.v += (tv - m.v) * k;   // settle against it, facing in
+        tu = h.u; tv = h.v; want = 0; turnRate = 1;
+      } else {
+        if (m.state !== 'walk') setState(m, 'walk');
+        want = Math.min(TUNE.keeperRun, STD * 0.9 + 0.012); turnRate = 2.4;
+      }
+    } else {
+      if (m.state === 'nestle') { setState(m, 'feed'); m.walkT = 2 + rng.next() * 2; }
+      // the rim, clockwise, in long patient stretches; at each pause she turns to look in at them
+      m.walkT -= dt;
+      if (m.walkT <= 0) {
+        if (m.state === 'walk') { setState(m, 'feed'); m.walkT = (3 + rng.next() * 5) * (darkNow ? 1.6 : 1); }
+        else { setState(m, 'walk'); m.walkT = 8 + rng.next() * 9; }
+      }
+      if (floorOn && m.state === 'walk') { setState(m, 'feed'); m.walkT = 3; }
+      const th = Math.atan2(m.v, m.u);
+      const offRim = Math.hypot(m.u, m.v) < TUNE.keeperRim * 0.85;
+      rimPoint(offRim ? Math.atan2(m.hy, m.hx) : th + 0.32);
+      tu = RPU; tv = RPV;
+      if (m.state === 'walk') want = pace * (offRim ? 1.3 : 1);
+      else { tu = 0; tv = 0; turnRate = 0.5; }       // turned toward the centre, still
+    }
+    steer(m, tu, tv);
+    let dx = STX, dy = STY;
+    const rc = Math.hypot(m.u, m.v), rcl = 0.13 + m.r;   // off the clamp, round the felt
+    if (rc < rcl && want > 0) { const k = (rcl - rc) / rcl; dx += (m.u / (rc || 1)) * 3 * k; dy += (m.v / (rc || 1)) * 3 * k; }
+    const ds = field.dampers;
+    if (ds && ds.length && want > 0) for (const d of ds) {
+      const ddx = m.u - d.u, ddy = m.v - d.v, dd = Math.hypot(ddx, ddy) || 1, lim = (d.r || 0.06) + 0.06 + m.r;
+      if (dd < lim) { const k = (lim - dd) * 14 / dd; dx += ddx * k; dy += ddy * k; }
+    }
+    const dl = Math.hypot(dx, dy);
+    if (dl > 1e-4) {
+      const tx = dx / dl, ty = dy / dl;
+      let ang = Math.atan2(m.hx * ty - m.hy * tx, m.hx * tx + m.hy * ty);
+      const lim = turnRate * dt;
+      if (ang > lim) ang = lim; else if (ang < -lim) ang = -lim;
+      const c = Math.cos(ang), sn = Math.sin(ang);
+      const hx = m.hx * c - m.hy * sn, hy = m.hx * sn + m.hy * c, hl = Math.hypot(hx, hy) || 1;
+      m.hx = hx / hl; m.hy = hy / hl;
+      if (want > 0) want *= 0.4 + 0.6 * Math.max(0, m.hx * tx + m.hy * ty);
+    }
+    m.spd += (want - m.spd) * (1 - Math.exp(-dt / 0.8));
+    const mvx = m.hx * m.spd, mvy = m.hy * m.spd;
+    m.u = clamp(m.u + mvx * dt, -0.9, 0.9); m.v = clamp(m.v + mvy * dt, -0.9, 0.9);
+    m.vx += (mvx - m.vx) * Math.min(1, dt * 4); m.vy += (mvy - m.vy) * Math.min(1, dt * 4);
+    m.kx = 0; m.ky = 0;
+    m._flags = 0;
+  }
+
   function energy(m, dt) {
     const sp = m.spec;
     let feed = sp.feed;
+    if (m.state === 'cling') feed *= feed > 0 ? 0.5 : TUNE.braceHarm;   // pressed to the bronze, it holds its breath
     if (feed > 0) {
       const still = clamp(m.F / (A * A + 0.02), 0, 1);
       feed *= m.vig * crowdMul * (1 - TUNE.stillPenalty * still) * (sp.aurata ? 1 : detuneMul);
@@ -559,6 +740,7 @@ export function createLife(game) {
         (1 + TUNE.crowdStress * Math.max(0, m.near - 3))
       - TUNE.ageCost * (m.age / m.life);
     if (m.state === 'nestle' && game.hold) dE += 0.01;   // a faint purr against the finger
+    if (m.comfort > 0) dE += TUNE.keeperComfort * m.comfort;   // and a little comfort beside the keeper
     m.e = clamp(m.e + dE * dt, -0.01, choirOn ? Math.max(0.84, Math.min(m.e, 1)) : 1);   // the choir holds, it does not breed
   }
 
@@ -571,6 +753,7 @@ export function createLife(game) {
   }
 
   function stepMote(m, dt) {
+    if (m.keeper) { stepKeeper(m, dt); return; }
     const sp = m.spec;
     m.age += dt; m.st += dt;
     if (m.grace > 0) m.grace -= dt;
@@ -643,18 +826,14 @@ export function createLife(game) {
     if (m.e <= 0) { die(m, 'hunger'); return; }
     if (m.age >= m.life) { die(m, 'age'); return; }
 
-    const FA = m.F * A;
-    if (m.state !== 'startle' && FA > TUNE.startleFA && m.scool <= 0 && !floorOn && !choirOn) {
-      // tossed by a violent antinode: mostly chaos, a little away from the loudness, and when the
-      // plate is truly over-driven, flung outward toward the dark
-      const gl = Math.hypot(SGU, SGV) || 1, sg = SF > 0 ? -1 : 1;
-      const a = rng.next() * TAU, rr = Math.hypot(m.u, m.v) || 1, fling = clamp((FA - 1) * 0.5, 0, 0.8);
-      const ax = Math.cos(a) + 0.35 * sg * SGU / gl + fling * m.u / rr, ay = Math.sin(a) + 0.35 * sg * SGV / gl + fling * m.v / rr;
-      startle(m, Math.min(2.2, 0.22 + (FA - TUNE.startleFA) * 0.9), ax, ay);
-    } else if (overdrive > 0 && m.state !== 'startle' && m.scool <= 0 && !floorOn && rng.next() < overdrive * 1.1 * dt) {
-      // an over-driven plate (the same loudness that fatigues the bronze) tosses everyone about
-      const a = rng.next() * TAU, rr = Math.hypot(m.u, m.v) || 1;
-      startle(m, 0.25 + 1.15 * overdrive, Math.cos(a) + 0.6 * overdrive * m.u / rr, Math.sin(a) + 0.6 * overdrive * m.v / rr);
+    // violence: a strong antinode under it, or a plate driven past what the bronze can bear
+    const V = m.F * A + TUNE.clingOver * overdrive;
+    const hold0 = game.hold;
+    m.shelter = shelterAt(m.u, m.v);
+    if (m.state !== 'cling') m.grip = Math.min(gripMax(m), m.grip + TUNE.clingRegen * dt);
+    if (V > TUNE.clingV && FREE[m.state] && !floorOn && !choirOn && !(m.nest && (hold0 || moth))) {
+      setState(m, 'cling'); m.calm = 0; m.hunt = null; m.lunge = 0; m.spd *= 0.4;
+      bus.emit('mote:cling', { mote: m });
     }
 
     const kl = 1 - Math.exp(-dt / 0.3);                  // creatures do not twitch at every jostle
@@ -662,14 +841,32 @@ export function createLife(game) {
     let dx = 0, dy = 0, want = 0, turnRate = 3.2;
     const e01 = clamp(m.e, 0, 1);
     const base = (TUNE.speedMin + (TUNE.speedMax - TUNE.speedMin) * e01) * (darkNow ? 0.35 : 1);
-    const hold = game.hold && holdSpeed < 0.15 ? game.hold : null;
+    const hold = game.hold && holdSpeed < 0.15 && !keeperFirst ? game.hold : null;
     const still = hold || moth;
     const stillReach = hold ? holdReach : 0.5;
     let flags = 0;
 
     if (m.state === 'startle') {
-      if (m.st >= m.dur) { setState(m, 'walk'); m.walkT = 0.3 + rng.next() * 0.8; }
+      if (m.st >= m.dur) { setState(m, 'walk'); m.walkT = 0.3 + rng.next() * 0.8; m.thrown = false; }
       dx = m.hx; dy = m.hy; want = 0;
+    } else if (m.state === 'cling') {
+      // holding on: pressed to the bronze, trembling, creeping toward the nearest still line. The
+      // grip fails only while the player keeps the plate violent, and never near a still point.
+      if (V < TUNE.clingV * 0.8 || floorOn || choirOn) m.calm += dt; else m.calm = 0;
+      if (m.calm > TUNE.clingCalm) {
+        setState(m, 'walk'); m.walkT = 0.5 + rng.next() * 1.2; m.scool = Math.max(m.scool, 0.5);
+        dx = m.hx; dy = m.hy; want = base * 0.5;
+      } else {
+        if (m.calm === 0 && drivenNow && !m.shelter) {
+          m.grip -= dt * (TUNE.clingDrain + TUNE.clingDrainV * clamp((V - TUNE.clingV) / 0.6, 0, 1));
+          if (m.grip <= 0) { throwMote(m, V); return; }
+        }
+        const gn = Math.hypot(SGU, SGV);
+        if (gn > 1e-3) { const sg = SF > 0 ? -1 : 1; dx = sg * SGU / gn; dy = sg * SGV / gn; } else { dx = m.hx; dy = m.hy; }
+        dx += m.lsx * 0.3; dy += m.lsy * 0.3;
+        want = base * TUNE.clingCreep; turnRate = 5;
+        flags |= FLAG.cling;
+      }
     } else if (choirOn) {
       // the ring: everyone floats to their place, slowly turning together
       const ang = (m.ring / Math.max(1, choirSeats)) * TAU + choirPhase + T * 0.05;
@@ -800,7 +997,7 @@ export function createLife(game) {
     m.vx += (mvx - m.vx) * Math.min(1, dt * 8); m.vy += (mvy - m.vy) * Math.min(1, dt * 8);
     m._flags = flags;
 
-    if (m.state !== 'startle') {                      // walking never carries a singer over the edge
+    if (m.state !== 'startle' || !m.thrown || m.shelter) {   // only a throw carries a singer over the edge
       if (m.u > 0.94) { m.u = 0.94; if (m.hx > 0) m.hx = -m.hx * 0.5; }
       else if (m.u < -0.94) { m.u = -0.94; if (m.hx < 0) m.hx = -m.hx * 0.5; }
       if (m.v > 0.94) { m.v = 0.94; if (m.hy > 0) m.hy = -m.hy * 0.5; }
@@ -808,7 +1005,7 @@ export function createLife(game) {
     }
     if (Math.abs(m.u) > 1.02 || Math.abs(m.v) > 1.02) {
       setState(m, 'fall', DUR.fall);
-      m.cause = 'fall'; m.hunt = null; m.nest = false;
+      m.cause = 'fall'; m.hunt = null; m.nest = false; m.thrown = false;
       m.kx = mvx * 0.6; m.ky = mvy * 0.6;
       bump(sp, 'fell');
       bus.emit('mote:fall', { mote: m });
@@ -831,6 +1028,13 @@ export function createLife(game) {
     return false;
   }
 
+  // singers born so far (progress keeps state.stats.births; a bare harness may not)
+  function birthsSoFar() { return Math.max(+(state.stats?.births) || 0, sandBirths); }
+  function knownKinds() {
+    if (kindsKnown < 0) { kindsKnown = 0; for (const id in state.species) if (id !== KEEPER_ID) kindsKnown++; }
+    return kindsKnown;
+  }
+
   // is anything but the singers driving the plate? (bow, fork, phonograph)
   function isDriven() {
     if (!field.getSource) return true;
@@ -847,15 +1051,23 @@ export function createLife(game) {
     const coh = field.coherence || {};
     const dom = coh.dominant ? modeById(coh.dominant) : null;
     const lightOn = game.light ? game.light.on !== false : true;
-    const driven = isDriven();
+    const driven = drivenNow;
     const minTotal = driven ? TUNE.birthTotal : TUNE.songTotal;
-    const coherent = dom && !dom.special && dom.k >= 5 && coh.stable > TUNE.birthStable && coh.share > TUNE.birthShare &&
-      field.total > minTotal && lightOn && !floorOn && !choirOn;
+    // the first few singers come quickly to a steady bowed figure: the plate is eager to be found out
+    const early = driven && birthsSoFar() < TUNE.earlyBirths;
+    const coherent = dom && !dom.special && dom.k >= 5 && coh.stable > (early ? TUNE.earlyStable : TUNE.birthStable) &&
+      coh.share > TUNE.birthShare && field.total > minTotal && lightOn && !floorOn && !choirOn;
     if (!coherent) { quick = Math.max(0, quick - TUNE.quickDecay * dt); return; }
     if (quickMode !== dom.id) { quick *= 0.75; quickMode = dom.id; }
-    let rate = clamp((field.total - minTotal + 0.08) / 0.6, 0, 1.4) * clamp((coh.share - 0.5) / 0.3, 0, 1) / TUNE.gestation;
-    const domSp = species[dom.id];
-    if (domSp && domSp.n > 0) rate *= TUNE.familiar;
+    let rate;
+    if (early) {
+      rate = clamp((field.total - TUNE.earlyFrom) / TUNE.earlyRange, 0, 1) * clamp((coh.share - 0.5) / 0.25, 0, 1) / TUNE.earlyGestation;
+    } else {
+      const gest = knownKinds() < TUNE.earlyKinds ? TUNE.gestationFew : TUNE.gestation;
+      rate = clamp((field.total - minTotal + 0.08) / 0.6, 0, 1.4) * clamp((coh.share - 0.5) / 0.3, 0, 1) / gest;
+      const domSp = species[dom.id];
+      if (domSp && domSp.n > 0) rate *= TUNE.familiar;
+    }
     if (!driven) {                                   // a starving choir quickens nothing
       let se = 0, sn = 0;
       for (const sp of alive) { se += sp.sumE; sn += sp.n; }
@@ -897,6 +1109,7 @@ export function createLife(game) {
     sand?.take?.(best.u, best.v, 0.05, 6);            // the rest is drawn in while it forms
     const m = makeMote(sp, best.u, best.v, TUNE.newbornE, 0, 'born');
     m.gather = 12;
+    sandBirths++;
     quick -= TUNE.quickDrop;
     birthGap = TUNE.birthGap;
     const isNew = announce(sp);
@@ -944,7 +1157,7 @@ export function createLife(game) {
     for (const sp of choirSet) choirIds.push(sp.id);
     // seats on the ring: grouped by species, the groups ordered by where each species stands,
     // and the whole ring turned to sit as close as it can to where everyone already is
-    const list = motes.filter((m) => !m.dead && m.state !== 'die' && m.state !== 'fall');
+    const list = motes.filter((m) => !m.dead && !m.keeper && m.state !== 'die' && m.state !== 'fall');
     const spAng = (sp) => Math.atan2(sp.sv, sp.su);
     const angOf = (m) => Math.atan2(m.v, m.u);
     list.sort((a, b) => (a.spec === b.spec ? angOf(a) - angOf(b) : spAng(a.spec) - spAng(b.spec)));
@@ -1003,6 +1216,7 @@ export function createLife(game) {
     }
     if (recClock < 0.5) return;
     recClock = 0;
+    kindsKnown = -1;
     const now = Date.now();
     for (const sp of speciesList) {
       const r = state.species[sp.id];
@@ -1050,7 +1264,7 @@ export function createLife(game) {
   offs.push(bus.on('plate:tap', (p) => {
     if (!p) return;
     for (const m of motes) {
-      if (!FREE[m.state]) continue;
+      if (!FREE[m.state] || m.keeper) continue;
       const dx = m.u - p.u, dy = m.v - p.v, d = Math.hypot(dx, dy);
       if (d < 0.38) startle(m, 0.12 + 0.25 * (p.strength ?? 1) * (1 - d / 0.38), dx / (d || 1), dy / (d || 1));
     }
@@ -1058,10 +1272,17 @@ export function createLife(game) {
   offs.push(bus.on('damper:place', (p) => {
     if (!p) return;
     for (const m of motes) {
-      if (!FREE[m.state]) continue;
+      if (!FREE[m.state] || m.keeper) continue;
       const dx = m.u - p.u, dy = m.v - p.v, d = Math.hypot(dx, dy);
       if (d < 0.25) startle(m, 0.15, dx / (d || 1), dy / (d || 1));
     }
+  }));
+  // the first time the Floor falls quiet, the keeper stands up out of the bare bronze
+  offs.push(bus.on('floor:end', () => {
+    state.seen ||= {};
+    if (state.seen.keeper || keeperMote) return;
+    state.seen.keeperDue = true;
+    keeperDue = TUNE.keeperDelay;
   }));
 
   // --- main update ----------------------------------------------------------------------------
@@ -1086,6 +1307,24 @@ export function createLife(game) {
       const held = Number.isFinite(h.t) && Number.isFinite(game.t) ? Math.max(0, game.t - h.t) : 0;
       holdReach = 0.45 + Math.min(0.4, held * 0.03);    // the longer the stillness, the further it calls
     } else { holdHad = false; holdSpeed = 0; holdReach = 0.45; }
+    drivenNow = isDriven();
+
+    // the keeper: due after the first Floor (when the plate is quiet and lit), and always present after
+    if (!keeperMote || keeperMote.dead) {
+      keeperMote = null;
+      if (state.seen?.keeper) summonKeeper(false);
+      else if (state.seen?.keeperDue) {
+        if (keeperDue < 0) keeperDue = TUNE.keeperDelay;
+        keeperDue -= dt;
+        if (keeperDue <= 0 && !darkNow && !(field.amp && field.amp('floor') > 0.2)) summonKeeper(true);
+      }
+    }
+    // she comes to a still finger first; the others wait for her (a while)
+    keeperFirst = false;
+    if (h && keeperMote && keeperMote.state !== 'born') {
+      const held = Number.isFinite(h.t) && Number.isFinite(game.t) ? Math.max(0, game.t - h.t) : 99;
+      keeperFirst = keeperMote.state !== 'nestle' && Math.hypot(keeperMote.u - h.u, keeperMote.v - h.v) > 0.24 && held < TUNE.keeperWait;
+    }
 
     // a moth resting on the plate is a small, temporary stillness (tools may expose it either way)
     const mo = game.moth || game.tools?.moth;
@@ -1117,14 +1356,18 @@ export function createLife(game) {
     buildPopulations();
   }
 
+  // populations: the living species (the keeper last, flagged keeper:true, amp 0: she sings nothing
+  // into the plate)
   function buildPopulations() {
     popOut.length = 0;
-    for (let i = 0; i < alive.length; i++) {
-      const sp = alive[i];
-      let p = popPool[i];
-      if (!p) p = popPool[i] = { id: '', count: 0, meanE: 0, cu: 0, cv: 0, comps: null, ks: null, amp: 0, species: null };
+    const n = alive.length;
+    for (let i = 0; i <= n; i++) {
+      const sp = i < n ? alive[i] : (keeperMote && !keeperMote.dead ? keeperSp : null);
+      if (!sp || !(sp.n > 0)) continue;
+      let p = popPool[popOut.length];
+      if (!p) p = popPool[popOut.length] = { id: '', count: 0, meanE: 0, cu: 0, cv: 0, comps: null, ks: null, amp: 0, species: null, keeper: false };
       p.id = sp.id; p.count = sp.n; p.meanE = sp.sumE / sp.n; p.cu = sp.su / sp.n; p.cv = sp.sv / sp.n;
-      p.comps = sp.comps; p.ks = sp.ks; p.amp = sp.a; p.species = sp;
+      p.comps = sp.comps; p.ks = sp.ks; p.amp = i < n ? sp.a : 0; p.species = sp; p.keeper = i >= n;
       popOut.push(p);
     }
   }
@@ -1138,11 +1381,15 @@ export function createLife(game) {
       const o = c * 16;
       const sp = m.spec;
       inst[o] = m.u; inst[o + 1] = m.v; inst[o + 2] = m.r; inst[o + 3] = clamp(m.e, 0, 1);
-      inst[o + 4] = clamp(m.age / m.life, 0, 1);
-      // timed states carry their progress; walking carries its pace (for the feet)
-      const prog = FREE[m.state] ? clamp(m.spd / (TUNE.speedMax * 3.2), 0, 0.99)
+      // the keeper never ages: a constant warm age reads as golden-white in the shader
+      inst[o + 4] = m.keeper ? TUNE.keeperGlow : clamp(m.age / m.life, 0, 1);
+      // timed states carry their progress; walking carries its pace (for the feet); a clinging
+      // singer is drawn as startled, its shiver growing as its grip fails
+      let code = STATE_CODE[m.state], prog;
+      if (m.state === 'cling') { code = STATE_CODE.startle; prog = 0.6 * clamp(m.grip / gripMax(m), 0, 1); }
+      else prog = FREE[m.state] ? clamp(m.spd / (TUNE.speedMax * 3.2), 0, 0.99)
         : m.dur > 0 ? clamp(m.st / m.dur, 0, 0.99) : 0;
-      inst[o + 5] = STATE_CODE[m.state] + prog;
+      inst[o + 5] = code + prog;
       for (let k = 0; k < 3; k++) {
         const md = sp.modes[k];
         inst[o + 6 + k * 3] = md ? md.n : 0;
@@ -1154,8 +1401,11 @@ export function createLife(game) {
       if (m.state === 'sleep' || (darkNow && m.state !== 'walk')) fl |= FLAG.sleep;
       if (m.flash > 0) fl |= FLAG.flash;
       if (m.state === 'nestle') fl |= FLAG.nestle;
-      if (choirOn || floorOn) fl |= FLAG.float;
-      if (m.age > 0.8 * m.life) fl |= FLAG.old;
+      if ((choirOn || floorOn) && !m.keeper) fl |= FLAG.float;
+      if (m.keeper) fl |= FLAG.keeper;
+      else if (m.age > 0.8 * m.life) fl |= FLAG.old;
+      if (m.state === 'die' && m.cause === 'age') fl |= FLAG.ageDeath;
+      if (m.state === 'cling') fl |= FLAG.cling;
       inst[o + 15] = fl;
       c++;
     }
@@ -1205,15 +1455,18 @@ export function createLife(game) {
   function serialize() {
     const ms = [];
     const used = new Set();
+    let kp = null;
     for (const m of motes) {
       if (m.dead || m.state === 'die' || m.state === 'fall') continue;
+      if (m.keeper) { kp = [m.id, r4(m.u), r4(m.v), r3(m.hx), r3(m.hy), r1(m.age), m.born, r3(m.phase)]; continue; }
       ms.push([m.id, m.sp, r4(m.u), r4(m.v), r3(m.hx), r3(m.hy), r3(clamp(m.e, 0, 1)), r1(m.age), r1(m.life), m.gen, m.born, r3(m.phase), r1(Math.max(0, m.cool))]);
       used.add(m.spec);
     }
     return {
-      v: 1, t: r1(T), nextId, q: r3(quick), qm: quickMode,
+      v: 1, t: r1(T), nextId, q: r3(quick), qm: quickMode, sb: sandBirths,
       species: [...used].map((s) => [s.id, s.comps, s.aurata ? 1 : 0, s.gen, s.parents]),
       motes: ms, cc: r1(Math.max(0, choirCool)), fc: r1(Math.max(0, floorCool)), fa: floorArmed ? 1 : 0,
+      kp,                                            // the keeper: [id, u, v, hx, hy, age, born, phase] | null
     };
   }
 
@@ -1221,10 +1474,19 @@ export function createLife(game) {
     if (!obj || obj.v !== 1) return;
     for (const m of motes) m.dead = true;
     motes.length = 0;
+    keeperMote = null;
     try {
-      for (const s of obj.species || []) getSpecies(s[1], !!s[2], { gen: s[3] || 0, parents: s[4] || null });
+      for (const s of obj.species || []) if (s && s[0] !== KEEPER_ID) getSpecies(s[1], !!s[2], { gen: s[3] || 0, parents: s[4] || null });
+      const kp = Array.isArray(obj.kp) ? obj.kp : null;
+      if (kp && [kp[1], kp[2]].every(Number.isFinite)) {
+        const m = summonKeeper(false, clamp(kp[1], -0.9, 0.9), clamp(kp[2], -0.9, 0.9));
+        m.id = kp[0] | 0 || m.id;
+        if (Number.isFinite(kp[3]) && Number.isFinite(kp[4]) && Math.hypot(kp[3], kp[4]) > 0.1) { const l = Math.hypot(kp[3], kp[4]); m.hx = kp[3] / l; m.hy = kp[4] / l; }
+        m.age = Math.max(0, +kp[5] || 0); m.born = kp[6] || Date.now(); m.phase = Number.isFinite(kp[7]) ? kp[7] : m.phase;
+      }
       for (const a of obj.motes || []) {
         const [id, spId, u, v, hx, hy, e, age, life, gen, born, phase, cool] = a;
+        if (spId === KEEPER_ID) continue;               // exactly one, restored above (or by state.seen.keeper)
         let sp = species[spId];
         if (!sp && typeof spId === 'string') sp = getSpecies(spId.replace('*', '').split('|'), spId.endsWith('*'));
         if (!sp || ![u, v, e, age, life].every(Number.isFinite)) continue;
@@ -1237,7 +1499,7 @@ export function createLife(game) {
         m.grace = 1; m.dur = 0;
       }
       nextId = Math.max(nextId, obj.nextId | 0, ...motes.map((m) => m.id + 1));
-      T = +obj.t || 0; quick = clamp(+obj.q || 0, 0, 2); quickMode = obj.qm || null;
+      T = +obj.t || 0; quick = clamp(+obj.q || 0, 0, 2); quickMode = obj.qm || null; sandBirths = Math.max(0, obj.sb | 0);
       choirCool = +obj.cc || 0; floorCool = +obj.fc || 0; floorArmed = obj.fa !== 0;
     } catch (e) {
       console.warn('[life] could not restore singers', e);
@@ -1256,8 +1518,8 @@ export function createLife(game) {
     if (secs < 30) return notes;
     const dark = game.light ? game.light.on === false : false;
     darkNow = dark; A = 0.35; detuneMul = Math.max(0.5, 1 - TUNE.detunePenalty * (field.detune || 0));
-    const startCount = motes.filter((m) => !m.dead).length;
-    const startAlive = new Set(motes.filter((m) => !m.dead).map((m) => m.spec));
+    const startCount = motes.filter((m) => !m.dead && !m.keeper).length;
+    const startAlive = new Set(motes.filter((m) => !m.dead && !m.keeper).map((m) => m.spec));
     const born = new Set(), lost = new Set();
     let births = 0, deaths = 0, eaten = 0, fused = 0, oldAge = 0;
     const step = secs > 3600 ? 15 : secs > 900 ? 10 : 5;
@@ -1267,11 +1529,11 @@ export function createLife(game) {
       if (((typeof performance !== 'undefined' ? performance : Date).now() - t0) > 85) {
         // out of budget: let the remaining years pass on age alone
         const left = (steps - s) * dt;
-        for (const m of motes) { m.age += left; if (m.age >= m.life) { m.dead = true; deaths++; oldAge++; } }
+        for (const m of motes) { m.age += left; if (!m.keeper && m.age >= m.life) { m.dead = true; deaths++; oldAge++; } }
         break;
       }
       aggregate();
-      if (!motes.length) break;
+      if (!N) break;
       crowdMul = crowdOf(N);
       buildChorus(dark);
       computeFeed(true);
@@ -1279,6 +1541,11 @@ export function createLife(game) {
       for (let i = 0; i < n0; i++) {
         const m = motes[i];
         if (m.dead) continue;
+        if (m.keeper) {                                // she walks the rim, as ever
+          m.age += dt; rimPoint(Math.atan2(m.v, m.u) + dt * 0.006); m.u = RPU; m.v = RPV;
+          m.state = 'walk'; m.st = 0; m.dur = 0;
+          continue;
+        }
         m.state = 'walk'; m.st = 0; m.dur = 0; m.partner = null; m.hunt = null; m.flash = 0;
         m.F = 0.05 * A * A; m.near = 2;
         energy(m, dt);
@@ -1351,23 +1618,26 @@ export function createLife(game) {
       if (sp.n > 0) { r.extinct = false; r.lastSeen = Date.now(); }
       refreshNote(r, sp);
     }
-    for (const m of motes) { m.state = 'walk'; m.st = 0; m.dur = 0; m.grace = 1; m.r = TUNE.rBase; }
+    for (const m of motes) { m.state = 'walk'; m.st = 0; m.dur = 0; m.grace = m.keeper ? 1e9 : 1; m.r = TUNE.rBase * (m.keeper ? TUNE.keeperR : 1); m.thrown = false; }
     darkNow = false;
     buildChorus(dark); buildPopulations();
 
     // the field notes
     const mins = Math.round(secs / 60);
     const gens = Math.floor(secs / 340);
-    const endCount = motes.length;
+    const endCount = motes.filter((m) => !m.keeper).length;
     let lead;
-    if (!startCount && !endCount) lead = mins >= 90 ? `While you were away: ${timeWords(secs)} of silence. The plate did not stir.` : `The plate lay quiet for ${timeWords(secs)}.`;
+    if (!startCount && !endCount) {
+      lead = mins >= 90 ? `While you were away: ${timeWords(secs)} of silence. The plate did not stir.` : `The plate lay quiet for ${timeWords(secs)}.`;
+      if (keeperMote) lead = `The plate lay quiet for ${timeWords(secs)}. Only the pale one walked, round and round the rim.`;
+    }
     else if (gens >= 2) lead = `While you were away: ${numberWord(gens)} generations passed.`;
     else if (gens === 1) lead = 'While you were away: a generation passed.';
     else lead = `While you were away the plate sang to itself for ${timeWords(secs)}.`;
     if (dark && startCount) lead += ' The lamp was out; they slept through most of it.';
     notes.push({ kind: 'away', text: lead });
     if (startCount || endCount) {
-      if (!endCount) notes.push({ kind: 'away', text: 'None remain. The sand lies where the last of them crumbled.' });
+      if (!endCount) notes.push({ kind: 'away', text: keeperMote ? 'None remain but the pale one, who walks the rim as before.' : 'None remain. The sand lies where the last of them crumbled.' });
       else if (endCount !== startCount) notes.push({ kind: 'away', text: `They numbered ${numberWord(startCount)} when you left; there are now ${numberWord(endCount)}.` });
       else notes.push({ kind: 'away', text: `Their number is unchanged at ${numberWord(endCount)}, though not all are the same individuals.` });
     }
@@ -1393,7 +1663,7 @@ export function createLife(game) {
   }
 
   const life = {
-    motes, species, TUNE, STATES, STATE_CODE, FLAG,
+    motes, species, TUNE, STATES, STATE_CODE, FLAG, KEEPER_ID,
     update,
     chorus() { return chorusOut; },
     populations() { return popOut; },
@@ -1403,6 +1673,8 @@ export function createLife(game) {
     get quickening() { return quick; },
     get count() { return N; },
     get dreamingOf() { return dreamKey || null; },
+    get keeper() { return keeperMote && !keeperMote.dead ? keeperMote : null; },
+    get keeperDue() { return !keeperMote && !!state.seen?.keeperDue; },
     speciesOf(m) { return m?.spec || species[m?.sp] || null; },
     // dev helpers (also used by tests and harnesses)
     spawn(comps, u = 0.4, v = 0.4, e = 0.7, opts = {}) {
@@ -1416,6 +1688,8 @@ export function createLife(game) {
       if (!opts.silent) bus.emit('mote:birth', { mote: m, species: sp, isNew });
       return m;
     },
+    // dev: bring the keeper now (fresh = born at the centre with events; once only, like the real thing)
+    summonKeeper(fresh = true) { return summonKeeper(!!fresh, 0, 0); },
     destroy() { for (const off of offs) try { off?.(); } catch {} },
   };
   aggregate(); buildChorus(false); buildPopulations();

@@ -10,6 +10,13 @@ const NUMWORD = ['nought', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'
   'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
 const ORDINAL = ['', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth'];
 
+// The keeper: the one creature of the fundamental (mode 'floor', k 2), who stands up out of the
+// bare bronze after the first Floor. Named for the previous keeper; her note is in Voss's voice.
+export const KEEPER = Object.freeze({ id: 'keeper', comps: ['floor'], genus: 'Vossia', epithet: 'fundamentalis',
+  name: 'Vossia fundamentalis' });
+const isKeeper = (x) => !!x && (x.id === KEEPER.id || x.keeper === true ||
+  (Array.isArray(x.comps) && x.comps.length === 1 && x.comps[0] === 'floor'));
+
 // --- small deterministic helpers -------------------------------------------------------------
 function hash(s) {
   let h = 2166136261 >>> 0;
@@ -122,6 +129,7 @@ function chordGenus(cs) {
 const DESCRIPTORS = ['minor', 'major', 'gracilis', 'robusta', 'pallida', 'obscura', 'vagans', 'tardigrada',
   'elegans', 'pusilla', 'nobilis', 'modesta', 'secunda', 'tertia', 'serotina', 'vespertina', 'tacita', 'canora'];
 export function nameFor(comps, aurata = false, variant = false) {
+  if (comps && comps.length === 1 && comps[0] === 'floor') return { genus: KEEPER.genus, epithet: KEEPER.epithet, name: KEEPER.name, third: null };
   const cs = sortComps(comps && comps.length ? comps : ['1.1+']);
   let genus, epithet, third;
   if (cs.length === 1) {
@@ -149,6 +157,7 @@ export function nameFor(comps, aurata = false, variant = false) {
 
 // 'k 29' · 'k 10, 20 (1:2)' · 'k 10, 20, 25 (2:4:5)'
 export function speciesRatioText(species) {
+  if (isKeeper(species)) return 'k 2 · below the lowest note';
   const ks = (species?.ks?.length ? species.ks : (species?.comps || []).map((c) => parseComp(c).k)).slice().sort((a, b) => a - b);
   if (!ks.length) return '';
   if (ks.length === 1) {
@@ -175,6 +184,7 @@ const CLAN_HUE = {
   '61': [0.84, 1.0, 0.62], '65': [1.0, 0.62, 0.56], '85': [0.72, 0.96, 1.0],
 };
 export function colourFor(compId, aurata = false) {
+  if (compId === 'floor') return [1.0, 0.93, 0.76];          // the keeper: golden-white
   const c = parseComp(compId);
   const clan = clanOf(c.k);
   let rgb = CLAN_HUE[clan];
@@ -330,8 +340,18 @@ const NOTES = [
 
 export const NOTE_COUNT = NOTES.length;
 
+// The keeper's own note, in Voss's hand. It grows by a sentence as she is seen to do things.
+function keeperNote(record) {
+  const st = record?.stats || {};
+  let t = 'Walks the rim. Does not eat, does not fade. Comes to a still finger before the others do.';
+  if ((st.nestles || 0) >= 2) t += ' Stays there after they have gone.';
+  else if ((st.nestles || 0) === 1) t += ' I believe she knows the hand.';
+  return t;
+}
+
 // noteFor(species, record?, stats?) -> string. `stats` is game.state.stats (optional).
 export function noteFor(species, record, stats) {
+  if (isKeeper(species) || isKeeper(record)) return keeperNote(record || species?.record);
   const ctx = makeCtx(species, record || species?.record, stats);
   const ok = [];
   for (let i = 0; i < NOTES.length; i++) {
@@ -368,6 +388,7 @@ export function observationFor(type, p = {}) {
     case 'mote:fall': return 'A singer was thrown from the edge.';
     case 'life:choir': return p.on ? 'The singers formed a ring. The light went gold.' : null;
     case 'life:floor': return p.on ? 'A note below the lowest note. The sand fled to the rim.' : null;
+    case 'keeper:arrive': return 'When the low note ended, something large and pale stood up out of the bare bronze at the centre, and walked to the rim.';
     default: return null;
   }
 }
