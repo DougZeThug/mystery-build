@@ -1,31 +1,271 @@
 <!doctype html><meta charset="utf-8"><title>physics harness</title>
-<style>body{margin:0;background:#111;color:#ccc;font:12px monospace}canvas{display:block}</style>
-<canvas id="c" width="600" height="600"></canvas><div id="info"></div>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0d0b09; color: #b9ab92; font: 12px/1.45 ui-monospace, Menlo, monospace; }
+  main { display: flex; flex-wrap: wrap; gap: 14px; padding: 14px; align-items: flex-start; }
+  canvas { display: block; background: #000; }
+  #info { white-space: pre; min-width: 280px; }
+  a { color: #d9b26a; }
+</style>
+<main><canvas id="c" width="600" height="600"></canvas><div id="info"></div></main>
 <script type="module">
-import { createField } from '../src/sim/field.js';
+// Standalone harness for the plate physics.
+//   ?modes=3.5-,2.4+   modes driven by a test source (amp split equally)   &amp=0.8
+//   &secs=8            pre-simulate this many seconds, then draw once (window.done = true)
+//   &live              keep running in real time (default when secs is absent)
+//   &view=grains|density|field|both                &n=22000 grains   &peaks  mark birth sites
+//   &scenario=floor | heal | bow | silence | cracks | dream (&dream=3.4-)   &seed=1
+//   &glsl              compile GLSL_MODE in WebGL2 and compare chladniN with evalMode
+//   &tune={"J_BASE":0.02}  override SAND_TUNING values
+// Keys (live): 1-9 pick a bowable mode, f floor, space silence, c crack, g pour gold on a crack.
+import { createField, makeCrackFamily } from '../src/sim/field.js';
 import { createSand } from '../src/sim/sand.js';
-import { MODES } from '../src/sim/modes.js';
+import { MODES, BOWABLE, modeById, evalMode, bowPick, GLSL_MODE, EDGES } from '../src/sim/modes.js';
+
 const q = new URLSearchParams(location.search);
-const modes = (q.get('modes') || '3.5-').split(',');
-const secs = +(q.get('secs') || 6);
-const state = { plate: { fatigue: 0, cracks: [] } };
-const field = createField({ state });
-const sand = createSand(field, { state });
-sand.seedScatter(22000);
-field.setSource('test', modes.map((m) => ({ mode: m, amp: 0.8 / Math.sqrt(modes.length) })));
+const modes = (q.get('modes') || '3.5-').split(',').filter((m) => modeById(m));
+const amp = +(q.get('amp') || 0.8);
+const secs = q.has('secs') ? +q.get('secs') : 0;
+const live = q.has('live') || !q.has('secs');
+const view = q.get('view') || 'grains';
+const scenario = q.get('scenario') || '';
+const W = 600;
 const c = document.getElementById('c'), ctx = c.getContext('2d');
-const dt = 1 / 60;
-const t0 = performance.now();
-for (let s = 0; s < secs * 60; s++) { field.update(dt); sand.update(dt); }
-const ms = (performance.now() - t0) / (secs * 60);
-ctx.fillStyle = '#6a4a26'; ctx.fillRect(0, 0, 600, 600);
-const img = ctx.getImageData(0, 0, 600, 600);
-for (let i = 0; i < sand.n; i++) {
-  const px = ((sand.x[i] + 1) * 300) | 0, py = ((sand.y[i] + 1) * 300) | 0;
-  const p = (py * 600 + px) * 4;
-  img.data[p] = sand.kind[i] ? 255 : 235; img.data[p + 1] = sand.kind[i] ? 200 : 225; img.data[p + 2] = sand.kind[i] ? 80 : 200;
+if (view === 'both') { c.width = W * 2; }
+const info = document.getElementById('info');
+
+let seedState = +(q.get('seed') || 7) >>> 0 || 7;
+const rng = () => { seedState = (Math.imul(seedState, 1664525) + 1013904223) >>> 0; return seedState / 4294967296; };
+const events = [];
+const bus = { emit: (type, p) => events.push(`${type} ${JSON.stringify(p)}`) };
+const state = { plate: { fatigue: 0, cracks: [] } };
+const field = createField({ state, bus, rng });
+let tuning = null;
+try { tuning = q.has('tune') ? JSON.parse(q.get('tune')) : null; } catch { tuning = null; }
+const sand = createSand(field, { state, bus, tuning });
+sand.seedScatter(+(q.get('n') || 22000));
+
+function drive(list, a = amp) { field.setSource('test', list.map((m) => ({ mode: m, amp: a / Math.sqrt(list.length) }))); }
+
+// ---- scenarios -------------------------------------------------------------------------------
+let simT = 0;
+const script = [];
+function at(t, fn) { script.push({ t, fn, done: false }); }
+if (scenario === 'floor') {
+  drive(modes); at(4, () => { field.setSource('test', []); field.setSource('floor', [{ mode: 'floor', amp: 1.2 }]); });
+} else if (scenario === 'dream') {
+  // form a figure, fall silent, then dream of another (q.get('dream') || '3.4-')
+  drive(modes); at(4, () => field.setSource('test', []));
+  at(10, () => sand.setDream([{ mode: q.get('dream') || '3.4-', amp: 0.6 }]));
+} else if (scenario === 'silence') {
+  drive(modes); at(5, () => field.setSource('test', []));
+} else if (scenario === 'heal' || scenario === 'cracks') {
+  const fam = makeCrackFamily(rng);
+  state.plate.cracks.push(fam[0]);
+  for (let b = 1; b < fam.length; b++) { fam[b].branchOf = 0; state.plate.cracks.push(fam[b]); }
+  if (scenario === 'cracks') for (let k = 0; k < 3; k++) {
+    const f2 = makeCrackFamily(rng); const i0 = state.plate.cracks.length; state.plate.cracks.push(f2[0]);
+    for (let b = 1; b < f2.length; b++) { f2[b].branchOf = i0; state.plate.cracks.push(f2[b]); }
+  }
+  drive(modes, 0.5);
+  if (scenario === 'heal') for (let k = 1; k <= 14; k++) at(k * 0.8, () => pourGoldOnCracks(14));
+} else if (scenario === 'bow') {
+  // a slow bow along the top edge, then a fast one along the right
+  let cur = null;
+  script.push({ t: 0, every: true, fn: () => {
+    const fast = simT > 6;
+    const edge = fast ? 'right' : 'top', t = fast ? 0.32 : 0.62, sp = fast ? 0.8 : 0.12;
+    cur = bowPick(edge, t, sp, cur);
+    field.setSource('bow', [{ mode: cur, amp: 0.25 + 0.9 * sp }]);
+  } });
+} else drive(modes);
+
+function pourGoldOnCracks(n) {
+  for (const cr of state.plate.cracks) {
+    if (cr.healed) continue;
+    for (let k = 0; k < n; k++) {
+      const p = cr.pts[Math.floor(rng() * cr.pts.length)];
+      sand.pour(p[0] * 0.985, p[1] * 0.985, 1, 1, 0.012);
+    }
+  }
 }
-ctx.putImageData(img, 0, 0);
-document.getElementById('info').textContent = `modes=${modes} n=${sand.n} total=${field.total.toFixed(3)} ms/step=${ms.toFixed(2)} stable=${field.coherence.stable.toFixed(1)} peaks=${sand.peaks().length}`;
+
+function step(dt) {
+  for (const s of script) {
+    if (s.every) { s.fn(); continue; }
+    if (!s.done && simT >= s.t) { s.done = true; s.fn(); }
+  }
+  const a = performance.now(); field.update(dt); const b = performance.now(); sand.update(dt); const e = performance.now();
+  stats.field.push(b - a); stats.sand.push(e - b);
+  if (stats.field.length > 240) { stats.field.shift(); stats.sand.shift(); }
+  simT += dt;
+}
+const stats = { field: [], sand: [] };
+const med = (arr) => { if (!arr.length) return 0; const s = [...arr].sort((x, y) => x - y); return s[s.length >> 1]; };
+
+// ---- drawing ---------------------------------------------------------------------------------
+const img = ctx.createImageData(W, W);
+const acc = new Float32Array(W * W), gacc = new Float32Array(W * W);
+const BR = [96, 67, 34];
+function drawGrains(ox) {
+  acc.fill(0); gacc.fill(0);
+  for (let i = 0; i < sand.n; i++) {
+    const px = ((sand.x[i] + 1) * W / 2) | 0, py = ((sand.y[i] + 1) * W / 2) | 0;
+    if (px < 0 || py < 0 || px >= W || py >= W) continue;
+    (sand.kind[i] ? gacc : acc)[py * W + px] += 1;
+  }
+  const d = img.data;
+  for (let p = 0, o = 0; p < W * W; p++, o += 4) {
+    const a = 1 - Math.exp(-acc[p] * 0.45), g = 1 - Math.exp(-gacc[p] * 0.9);
+    const sh = bronzeShade(p);
+    d[o] = sh * BR[0] + (233 - sh * BR[0]) * a + (255 - sh * BR[0]) * g * (1 - a);
+    d[o + 1] = sh * BR[1] + (223 - sh * BR[1]) * a + (196 - sh * BR[1]) * g * (1 - a);
+    d[o + 2] = sh * BR[2] + (200 - sh * BR[2]) * a + (92 - sh * BR[2]) * g * (1 - a);
+    d[o + 3] = 255;
+  }
+  ctx.putImageData(img, ox, 0);
+}
+function bronzeShade(p) { const x = p % W, y = (p / W) | 0; const r = Math.hypot(x - W * 0.42, y - W * 0.38) / W; return 1.15 - 0.55 * r; }
+
+// emulation of the renderer's reading of sand.texture(): height from density, lit from upper left
+let Hs = null, Gs = null;
+function drawDensity(ox) {
+  const tex = sand.texture(), D = sand.D, d = img.data;
+  if (!Hs) { Hs = new Float32Array(D * D); Gs = new Float32Array(D * D); }
+  for (let p = 0; p < D * D; p++) { const v = tex[p * 4] / 255; Hs[p] = v * v * (3 - 2 * v); Gs[p] = tex[p * 4 + 1] / 255; }
+  const at = (arr, i, j) => arr[Math.max(0, Math.min(D - 1, j)) * D + Math.max(0, Math.min(D - 1, i))];
+  for (let y = 0; y < W; y++) {
+    const fy = (y + 0.5) / W * D - 0.5, j = Math.floor(fy), ay = fy - j;
+    for (let x = 0; x < W; x++) {
+      const fx = (x + 0.5) / W * D - 0.5, i = Math.floor(fx), ax = fx - i;
+      const H = (at(Hs, i, j) * (1 - ax) + at(Hs, i + 1, j) * ax) * (1 - ay) + (at(Hs, i, j + 1) * (1 - ax) + at(Hs, i + 1, j + 1) * ax) * ay;
+      const Gd = (at(Gs, i, j) * (1 - ax) + at(Gs, i + 1, j) * ax) * (1 - ay) + (at(Gs, i, j + 1) * (1 - ax) + at(Gs, i + 1, j + 1) * ax) * ay;
+      const nx = (at(Hs, i + 1, j) - at(Hs, i - 1, j)) * 2.2, ny = (at(Hs, i, j + 1) - at(Hs, i, j - 1)) * 2.2;
+      const lit = Math.max(0, Math.min(1.3, 0.78 + (-nx * 0.6 - ny * 0.7) * 1.1));
+      const cov = Math.min(1, H * 1.6), gc = Math.min(1, Gd * 1.4);
+      const o = (y * W + x) * 4, sh = bronzeShade(y * W + x);
+      const sr = 139 + (233 - 139) * lit, sg = 123 + (223 - 123) * lit, sb = 99 + (200 - 99) * lit;
+      let r = sh * BR[0] * (1 - cov) + sr * cov, g = sh * BR[1] * (1 - cov) + sg * cov, b = sh * BR[2] * (1 - cov) + sb * cov;
+      r = r * (1 - gc) + 255 * gc * lit; g = g * (1 - gc) + 204 * gc * lit; b = b * (1 - gc) + 102 * gc * lit;
+      d[o] = r; d[o + 1] = g; d[o + 2] = b; d[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, ox, 0);
+}
+
+function drawField(ox) {
+  const d = img.data, G = field.G;
+  for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+    const s = field.sample((x + 0.5) / W * 2 - 1, (y + 0.5) / W * 2 - 1);
+    const t = Math.min(1, Math.sqrt(s.F)), o = (y * W + x) * 4;
+    d[o] = 30 + 200 * t; d[o + 1] = 25 + 120 * t * t; d[o + 2] = 40 + 60 * (1 - t); d[o + 3] = 255;
+  }
+  ctx.putImageData(img, ox, 0);
+}
+
+function drawOverlay(ox) {
+  ctx.save(); ctx.translate(ox, 0);
+  ctx.lineCap = 'round';
+  for (const cr of state.plate.cracks) {
+    for (let k = 0; k < cr.pts.length - 1; k++) {
+      const [a, b] = cr.pts[k], [e, f] = cr.pts[k + 1];
+      const g = cr.gold[k] || 0;
+      ctx.strokeStyle = cr.healed ? 'rgba(255,205,110,0.95)' : `rgba(${20 + 235 * g},${12 + 190 * g},${8 + 90 * g},0.9)`;
+      ctx.lineWidth = cr.healed ? 2 : 1.1;
+      ctx.beginPath(); ctx.moveTo((a + 1) * W / 2, (b + 1) * W / 2); ctx.lineTo((e + 1) * W / 2, (f + 1) * W / 2); ctx.stroke();
+    }
+  }
+  if (q.has('peaks')) {
+    sand.peaks().forEach((p, i) => {
+      ctx.strokeStyle = i < 3 ? '#7fe0ff' : 'rgba(127,224,255,0.45)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc((p.u + 1) * W / 2, (p.v + 1) * W / 2, 9, 0, Math.PI * 2); ctx.stroke();
+    });
+  }
+  ctx.restore();
+}
+
+function draw() {
+  if (view === 'density') drawDensity(0);
+  else if (view === 'field') drawField(0);
+  else if (view === 'both') { drawGrains(0); drawDensity(W); }
+  else drawGrains(0);
+  drawOverlay(0);
+  if (view === 'both') drawOverlay(W);
+  const coh = field.coherence;
+  info.textContent = [
+    `t ${simT.toFixed(1)} s   grains ${sand.n}  (gold ${sand.goldCount})`,
+    `sources ${[...['test', 'bow', 'floor']].map((k) => field.getSource(k) ? k + ':' + field.getSource(k).map((s) => s.mode).join('+') : '').filter(Boolean).join(' ') || '—'}`,
+    `total ${field.total.toFixed(3)}  kEff ${field.kEff.toFixed(1)}  detune ${field.detune.toFixed(3)}`,
+    `dominant ${coh.dominant} share ${coh.share.toFixed(2)} stable ${coh.stable.toFixed(1)} s`,
+    `field ${med(stats.field).toFixed(3)} ms   sand ${med(stats.sand).toFixed(3)} ms (median)`,
+    `lost ${sand.lost}  drained ${sand.drained}  lodged ${sand.lodged}`,
+    `cracks ${state.plate.cracks.length}  healed ${state.plate.cracks.filter((k) => k.healed).length}`,
+    `peaks ${sand.peaks().slice(0, 4).map((p) => `(${p.u.toFixed(2)},${p.v.toFixed(2)})·${p.n}`).join(' ')}`,
+    `rim band ${(rimFraction() * 100).toFixed(1)}% of grains within 0.06 of the rim`,
+    `glsl ${glslReport}`,
+    ...events.slice(-4),
+  ].join('\n');
+}
+function rimFraction() { let k = 0; for (let i = 0; i < sand.n; i++) if (Math.max(Math.abs(sand.x[i]), Math.abs(sand.y[i])) > 0.94) k++; return sand.n ? k / sand.n : 0; }
+
+// ---- GLSL twin check: render chladniN for a few modes and compare with evalMode -------------
+let glslReport = 'n/a';
+function glslCheck() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 32;
+  const gl = cv.getContext('webgl2');
+  if (!gl) { glslReport = 'no webgl2'; return; }
+  const vs = `#version 300 es\nin vec2 p; out vec2 uv; void main(){ uv = p; gl_Position = vec4(p, 0.0, 1.0); }`;
+  const fs = `#version 300 es\nprecision highp float; in vec2 uv; uniform vec3 nms; out vec4 o;\n${GLSL_MODE}\nvoid main(){ float f = chladniN(vec2(uv.x, -uv.y), nms); o = vec4(f * 0.5 + 0.5, 0.0, 0.0, 1.0); }`;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  try {
+    const pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(pr);
+    gl.useProgram(pr);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    let maxErr = 0;
+    const px = new Uint8Array(32 * 32 * 4);
+    for (const m of ['1.3-', '3.5-', '2.4+', '5.5+', 'floor', '4.7-']) {
+      const mode = modeById(m);
+      gl.uniform3f(gl.getUniformLocation(pr, 'nms'), mode.n, mode.m, mode.s);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.readPixels(0, 0, 32, 32, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      for (let y = 0; y < 32; y += 3) for (let x = 0; x < 32; x += 3) {
+        const u = (x + 0.5) / 16 - 1, v = 1 - (y + 0.5) / 16;   // readPixels rows go bottom-up; plate v points down
+        const got = px[(y * 32 + x) * 4] / 255 * 2 - 1;
+        maxErr = Math.max(maxErr, Math.abs(got - evalMode(mode, u, v)));
+      }
+    }
+    glslReport = `compiled; max |chladniN - evalMode| = ${maxErr.toFixed(3)} (8-bit readback)`;
+  } catch (e) { glslReport = 'FAILED ' + e.message; console.error(e); }
+}
+if (q.has('glsl')) glslCheck();
+
+// ---- run ---------------------------------------------------------------------------------------
+const dt = 1 / 60;
+for (let s = 0; s < secs * 60; s++) step(dt);
+draw();
 window.done = true;
+window.__phys = { field, sand, state, step, draw, events };
+
+if (live) {
+  const keys = '123456789';
+  addEventListener('keydown', (e) => {
+    const i = keys.indexOf(e.key);
+    if (i >= 0) { const m = BOWABLE[Math.min(BOWABLE.length - 1, i * 4)]; drive([m.id]); }
+    if (e.key === 'f') { field.setSource('test', []); field.setSource('floor', [{ mode: 'floor', amp: 1.2 }]); }
+    if (e.key === ' ') { field.setSource('test', []); field.setSource('floor', []); e.preventDefault(); }
+    if (e.key === 'c') { const fam = makeCrackFamily(rng); const i0 = state.plate.cracks.length; state.plate.cracks.push(fam[0]); for (let b = 1; b < fam.length; b++) { fam[b].branchOf = i0; state.plate.cracks.push(fam[b]); } }
+    if (e.key === 'g') pourGoldOnCracks(20);
+  });
+  let last = performance.now();
+  const frame = (now) => {
+    requestAnimationFrame(frame);
+    const d = Math.min(1 / 20, (now - last) / 1000); last = now;
+    step(d > 0 ? d : dt);
+    draw();
+  };
+  requestAnimationFrame(frame);
+}
 </script>

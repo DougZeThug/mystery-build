@@ -1,0 +1,462 @@
+<!doctype html><meta charset="utf-8"><title>audio check</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; --bg: #0d0b09; --panel: #15110d; --line: #2a221a; --ink: #b9ab92; --dim: #7a6d5a; --hot: #e2b866; --ok: #8fc79a; --bad: #e07a5f; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; }
+  main { max-width: 1240px; margin: 0 auto; padding: 18px 16px 40px; }
+  h1 { font-size: 14px; font-weight: 600; color: var(--hot); margin: 0 0 4px; letter-spacing: .04em; }
+  h2 { font-size: 12px; font-weight: 600; color: var(--hot); margin: 22px 0 8px; letter-spacing: .06em; text-transform: uppercase; }
+  .sub { color: var(--dim); }
+  #status { color: var(--dim); }
+  canvas { display: block; width: 100%; background: #070605; border: 1px solid var(--line); border-radius: 3px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 8px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 7px 8px 8px; cursor: pointer; }
+  .card:hover { border-color: #4a3b29; }
+  .card .row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .card .name { color: #e8dcc4; }
+  .card canvas { height: 46px; }
+  .m { display: flex; flex-wrap: wrap; gap: 3px 10px; margin-top: 5px; color: var(--dim); }
+  .m b { color: var(--ink); font-weight: 500; }
+  .pass { color: var(--ok); } .fail { color: var(--bad); }
+  table { border-collapse: collapse; margin-top: 8px; }
+  td, th { padding: 2px 10px 2px 0; text-align: right; font-weight: 400; }
+  th { color: var(--dim); }
+  td:first-child, th:first-child { text-align: left; }
+  #mixinfo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { #mixinfo { grid-template-columns: 1fr; } }
+</style>
+<main>
+  <h1>stillpoint · audio offline check</h1>
+  <div class="sub">every one-shot and continuous voice rendered through an OfflineAudioContext at 48 kHz, then measured. click a card to listen. <span id="status">rendering…</span></div>
+  <h2>12-second mixed scene</h2>
+  <canvas id="spec" width="2400" height="560" style="height:280px"></canvas>
+  <div id="mixinfo"></div>
+  <h2>continuous voices</h2>
+  <div class="grid" id="cont"></div>
+  <h2>one-shots</h2>
+  <div class="grid" id="grid"></div>
+</main>
+<script type="module">
+// Offline verification for src/audio. Renders through OfflineAudioContext, measures each result:
+// peak (must stay < 0.9), RMS, NaN count, DC offset, spectral centroid, tail level (no runaway),
+// and that one-shot voices free their nodes. window.__report holds everything for dev/audio-check.mjs.
+import { createEngine } from '../src/audio/engine.js';
+import { makeSnapshot } from '../src/audio/audio.js';
+import { MODES, modeById } from '../src/sim/modes.js';
+
+const SR = 48000;
+const q = new URLSearchParams(location.search);
+const only = q.get('only');
+
+const ONE_SHOTS = [
+  ['tap', { u: 0.3, v: -0.4, strength: 0.7 }, 3],
+  ['tap', { u: 0.95, v: 0.95, strength: 1.2 }, 3, 'tap · hard, corner'],
+  ['crack', { pan: 0.4, freqs: [357.5, 550] }, 5],
+  ['heal', { root: 137.5 }, 7],
+  ['fork', { k: 20 }, 12],
+  ['forkTouch', { k: 20 }, 1],
+  ['damper', { pan: -0.2 }, 1],
+  ['damperOff', { pan: -0.2 }, 1],
+  ['pour', {}, 1.5],
+  ['scratch', { pan: 0.4 }, 1],
+  ['bowLift', { pan: 0.4 }, 1],
+  ['birth', { ks: [20], pan: 0.2 }, 4],
+  ['birth', { ks: [5, 10, 20], isNew: true, pan: -0.3 }, 4, 'birth · new, chord'],
+  ['birth', { ks: [65], aurata: true }, 4, 'birth · aurata, high'],
+  ['split', { ks: [13] }, 1.5],
+  ['fuse', { ks: [5, 25], ksA: [5], ksB: [25] }, 4],
+  ['eat', { ks: [13], preyKs: [10] }, 1.5],
+  ['crumble', { ks: [25] }, 3.5],
+  ['fizzle', { ks: [17] }, 2],
+  ['fall', { ks: [40], pan: 0.9 }, 6],
+  ['extinct', { ks: [13] }, 7],
+  ['choirSwell', { root: 68.75 }, 9],
+  ['floorBloom', {}, 6],
+  ['creak', { pan: -0.6 }, 2.5],
+  ['cord', {}, 1],
+  ['lightOn', {}, 3],
+  ['lightOff', {}, 2],
+  ['drawer', { open: true }, 1.5],
+  ['drawer', { open: false }, 1.5, 'drawer · close'],
+  ['page', {}, 1],
+  ['bookOpen', {}, 1.5],
+  ['bookClose', {}, 1],
+  ['grab', {}, 1],
+  ['drop', {}, 1],
+  ['glass', {}, 1.5],
+  ['tick', {}, 0.6],
+  ['reveal', {}, 3.5],
+  ['moth', { state: 'arrive' }, 2],
+  ['moth', { state: 'land' }, 1, 'moth · land'],
+  ['moth', { state: 'leave' }, 2, 'moth · leave'],
+];
+
+const idx = (id) => modeById(id).index;
+const sp = (id, ks, count, meanE = 0.7, cu = 0) => ({ id, ks, count, meanE, cu, aurata: id.endsWith('*') });
+
+// continuous voices: [name, seconds, script(t, snap, E, dt)]
+const CONTINUOUS = [
+  ['room tone', 4, () => {}, { room: true }],
+  ['bow · noise only', 4, (t, s) => {
+    const b = s.bow; b.held = true; b.bowing = t > 0.2 && t < 3.4; b.speed = Math.min(1, t / 3);
+    const m = MODES[idx('2.4+')]; b.modeIndex = m.index; b.freq = m.freq; b.pan = 0.45;
+  }],
+  ['plate · one mode, amp 1', 3, (t, s) => { s.amps[idx('2.4+')] = t < 2.5 ? 1 : 0; s.total = s.amps[idx('2.4+')]; }],
+  ['plate · 6 modes + cracks', 4, (t, s) => {
+    ['1.2+', '1.3+', '2.4+', '2.3-', '3.5+', '1.6-'].forEach((m, i) => { s.amps[idx(m)] = 0.55 / (1 + i * 0.3); });
+    s.detune = t > 1.5 ? 0.012 : 0; s.total = 1.2;
+  }],
+  ['bow · speed sweep', 4, (t, s) => {
+    const b = s.bow; b.held = true; b.bowing = t > 0.2 && t < 3.4; b.speed = Math.min(1, t / 3);
+    const m = MODES[b.speed < 0.45 ? idx('2.3+') : idx('2.5+')]; b.modeIndex = m.index; b.freq = m.freq; b.pan = 0.45;
+    s.amps[m.index] = b.bowing ? 0.25 + 0.9 * b.speed : 0; s.total = s.amps[m.index];
+  }],
+  ['singers · 6 species', 4, (t, s) => {
+    const L = [sp('1.2+', [5], 4), sp('2.4+', [20], 6, 0.9, 0.4), sp('1.3+', [10], 3, 0.5, -0.5), sp('2.3+', [13], 2), sp('1.2+|2.4+', [5, 20], 3, 0.8, 0.2), sp('3.4+*', [25], 2, 0.9, -0.3)];
+    L.forEach((x, i) => { s.species[i] = x; }); s.nSpecies = L.length;
+  }],
+  ['singers · dark', 4, (t, s) => {
+    const L = [sp('1.2+', [5], 4), sp('2.4+', [20], 6, 0.9, 0.4), sp('1.3+', [10], 3, 0.5, -0.5)];
+    L.forEach((x, i) => { s.species[i] = x; }); s.nSpecies = L.length; s.dark = t > 0.8 ? 1 : 0;
+  }],
+  ['choir drone', 6, (t, s) => {
+    const L = [sp('1.2+', [5], 5), sp('1.3+', [10], 4), sp('2.4+', [20], 5)];
+    L.forEach((x, i) => { s.species[i] = x; }); s.nSpecies = L.length;
+    s.choir = Math.min(1, t / 2) * (t < 4.5 ? 1 : 0); s.choirRoot = 68.75;
+  }],
+  ['floor bloom', 8, (t, s) => {
+    s.floor = t < 5 ? Math.min(1, t / 2) : Math.max(0, 1 - (t - 5) * 0.4);
+    s.amps[MODES.findIndex((m) => m.special)] = s.floor * 1.2; s.total = s.floor * 1.2;
+  }],
+  ['sand · rattle + pour', 3, (t, s, E) => { s.total = t < 2 ? 0.9 : 0; s.stable = t; if (t > 0.5 && t < 1.5) E.pour(12, -0.3); }],
+];
+
+// --- analysis ------------------------------------------------------------------------------
+function fft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2;
+        const tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+        const nr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = nr;
+      }
+    }
+  }
+}
+const N = 2048, HANN = Float32Array.from({ length: N }, (_, i) => 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1)));
+
+function analyze(buf, from = 0) {
+  const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
+  const n = L.length, i0 = Math.floor(from * SR);
+  let peak = 0, sum2 = 0, sum = 0, nan = 0;
+  for (let i = i0; i < n; i++) {
+    const l = L[i], r = R[i];
+    if (!Number.isFinite(l) || !Number.isFinite(r)) { nan++; continue; }
+    const a = Math.max(Math.abs(l), Math.abs(r));
+    if (a > peak) peak = a;
+    sum2 += l * l + r * r; sum += l + r;
+  }
+  const cnt = Math.max(1, (n - i0) * 2);
+  const rms = Math.sqrt(sum2 / cnt), dc = sum / cnt;
+  // RMS of the loudest 50 ms window, and of the last 100 ms (decay / runaway check)
+  const W = Math.round(0.05 * SR);
+  let loud = 0;
+  for (let s = i0; s + W <= n; s += W >> 1) {
+    let e = 0;
+    for (let i = s; i < s + W; i++) e += L[i] * L[i] + R[i] * R[i];
+    loud = Math.max(loud, Math.sqrt(e / (2 * W)));
+  }
+  let te = 0; const T = Math.round(0.1 * SR);
+  for (let i = n - T; i < n; i++) te += L[i] * L[i] + R[i] * R[i];
+  const tail = Math.sqrt(te / (2 * T));
+  // spectral centroid over energetic frames
+  let cw = 0, cs = 0;
+  const re = new Float32Array(N), im = new Float32Array(N);
+  for (let s = i0; s + N <= n; s += N) {
+    let e = 0;
+    for (let i = 0; i < N; i++) { const v = (L[s + i] + R[s + i]) * 0.5; re[i] = v * HANN[i]; im[i] = 0; e += v * v; }
+    if (e / N < 1e-8) continue;
+    fft(re, im);
+    let mag = 0, fm = 0;                                   // power-weighted (tonal leakage cannot dominate)
+    for (let k = 1; k < N / 2; k++) { const m = re[k] * re[k] + im[k] * im[k]; mag += m; fm += m * k * SR / N; }
+    if (mag > 0) { cs += fm / mag * e; cw += e; }
+  }
+  const centroid = cw > 0 ? cs / cw : 0;
+  return { peak, rms, loud, dc, nan, tail, centroid, dur: n / SR };
+}
+
+const db = (x) => (x > 0 ? 20 * Math.log10(x) : -Infinity);
+const fmtDb = (x) => (x > 1e-9 ? db(x).toFixed(1) : '−∞');
+
+// --- rendering -----------------------------------------------------------------------------
+async function renderOneShot(name, params, dur) {
+  dur += 3;                                              // room for the voice to end and free itself
+  const oc = new OfflineAudioContext(2, Math.round(SR * dur), SR);
+  const E = createEngine(oc, { fadeIn: 0 });
+  E.start(0, 0, false);
+  const base = E.nodes;
+  const ok = E.play(name, { ...params }, 0.05);
+  const snap = makeSnapshot();
+  E.frame(snap, 1 / 60, 0);
+  const buf = await oc.startRendering();
+  await new Promise((r) => setTimeout(r, 30));           // let 'ended' events land
+  return { buf, played: ok, leaked: E.oneShots, nodesLeft: E.nodes - base };
+}
+
+async function renderScene(dur, script, { room = false, step = 1 / 60, events = null, trace = null } = {}) {
+  const oc = new OfflineAudioContext(2, Math.round(SR * dur), SR);
+  const E = createEngine(oc, { fadeIn: 0 });
+  E.start(0, 0, room);
+  const snap = makeSnapshot();
+  let t = 0;
+  const tick = () => {
+    const now = oc.currentTime;
+    const dt = now - t; t = now;
+    snap.amps.fill(0); snap.nSpecies = 0;
+    script(now, snap, E, dt);
+    E.frame(snap, dt || step, now);
+    if (trace) trace(now, E, snap);
+    const next = now + step;
+    if (next < dur - step) oc.suspend(next).then(tick);
+    oc.resume();
+  };
+  oc.suspend(step).then(tick);
+  E.frame(snap, step, 0);
+  const buf = await oc.startRendering();
+  return { buf, E };
+}
+
+// --- the mixed scene -------------------------------------------------------------------------
+function mixedScript() {
+  const fired = new Set();
+  const at = (time, now, key, fn) => { if (now >= time && !fired.has(key)) { fired.add(key); fn(); } };
+  let bowAmp = 0, choir = 0, floor = 0, detune = 0;
+  const pops = [];
+  return (now, s, E, dt) => {
+    // the bow: 0.3–4 s, slow then faster (k 13 → k 20)
+    const b = s.bow;
+    const bowing = now > 0.3 && now < 4;
+    b.held = now > 0.2 && now < 4.3; b.bowing = bowing;
+    b.speed = bowing ? 0.25 + 0.2 * Math.min(1, (now - 0.3) / 2) : 0;
+    const bm = MODES[now < 2.4 ? idx('2.3+') : idx('2.4+')];
+    b.modeIndex = bm.index; b.freq = bm.freq; b.pan = 0.45;
+    bowAmp += ((bowing ? 0.25 + 0.9 * b.speed : 0) - bowAmp) * Math.min(1, dt / (bowing ? 0.35 : 1.4));
+    s.amps[bm.index] += bowAmp;
+    at(0.3, now, 'bs', () => { E.bowOnset(1); E.play('scratch', { pan: 0.45 }); });
+    at(4.0, now, 'be', () => E.play('bowLift', { pan: 0.45 }));
+    at(1.0, now, 'tap', () => E.play('tap', { u: 0.3, v: -0.2, strength: 0.7 }));
+    // the population
+    pops.length = 0;
+    if (now > 3) pops.push(sp('2.4+', [20], Math.min(5, 1 + Math.floor((now - 3) / 1.2)), 0.8, 0.3));
+    if (now > 5) pops.push(sp('1.3+', [10], 3, 0.6, -0.4));
+    if (now > 6) pops.push(sp('1.2+', [5], 2, 0.7, 0.1));
+    if (now > 8) pops.push(sp('1.2+|2.4+', [5, 20], 2, 0.9, -0.2));
+    pops.forEach((p, i) => { s.species[i] = p; const a = 0.42 * (1 - Math.exp(-p.count / 3)) * (0.4 + 0.6 * p.meanE); p.ks.forEach((k, j) => { const id = p.id.split('|')[j]; s.amps[idx(id)] += a / Math.sqrt(p.ks.length); }); });
+    s.nSpecies = pops.length;
+    at(3.0, now, 'birth', () => E.play('birth', { ks: [20], isNew: true, pan: 0.3 }));
+    at(5.0, now, 'crack', () => E.play('crack', { pan: -0.5, freqs: [550, 357.5] }));
+    if (now > 5 && now < 9.5) detune = 0.006; else detune = Math.max(0, detune - dt * 0.01);
+    s.detune = detune;
+    at(5.5, now, 'split', () => E.play('split', { ks: [20], pan: 0.3 }));
+    at(6.2, now, 'eat', () => E.play('eat', { ks: [10], preyKs: [13], pan: -0.4 }));
+    at(6.8, now, 'fuse', () => E.play('fuse', { ks: [5, 20], ksA: [5], ksB: [20], pan: 0 }));
+    // darkness 7–10.5
+    s.dark = now > 7 && now < 10.5 ? 1 : 0;
+    at(7.0, now, 'off', () => { E.play('cord', {}); E.play('lightOff', {}); });
+    at(10.5, now, 'on', () => { E.play('cord', {}); E.play('lightOn', {}); });
+    // the choir 8–11, the floor 9–12
+    choir += ((now > 8 && now < 11 ? 1 : 0) - choir) * Math.min(1, dt * 0.6);
+    s.choir = choir; s.choirRoot = 68.75;
+    at(8.0, now, 'choir', () => E.play('choirSwell', { root: 68.75 }));
+    floor = now > 9 ? Math.min(1, floor + dt * 0.5) : 0;
+    s.floor = floor; s.amps[MODES.findIndex((m) => m.special)] = floor * 1.2;
+    at(9.0, now, 'floor', () => E.play('floorBloom', {}));
+    at(9.5, now, 'heal', () => E.play('heal', { root: 137.5 }));
+    at(10.0, now, 'crumble', () => E.play('crumble', { ks: [10], pan: -0.3 }));
+    at(10.4, now, 'fall', () => E.play('fall', { ks: [20], pan: 0.9 }));
+    if (now > 11 && now < 11.6) E.pour(12, 0.2);
+    at(11.5, now, 'moth', () => E.play('moth', { state: 'arrive', pan: -0.4 }));
+    let tot = 0; for (let i = 0; i < s.amps.length; i++) tot += s.amps[i] * s.amps[i];
+    s.total = Math.sqrt(tot); s.stable = now % 4;
+  };
+}
+const MIX_EVENTS = [[0.3, 'bow'], [1, 'tap'], [2.4, 'k20'], [3, 'birth'], [4, 'lift'], [5, 'crack'], [5.5, 'split'], [6.2, 'eat'], [6.8, 'fuse'], [7, 'dark'], [8, 'choir'], [9, 'floor'], [9.5, 'heal'], [10, 'crumble'], [10.4, 'fall'], [10.5, 'light'], [11, 'pour'], [11.5, 'moth']];
+
+// typical play: a bow and three species (node budget)
+function typicalScript() {
+  return (now, s) => {
+    const b = s.bow; b.held = true; b.bowing = now % 3 < 2; b.speed = 0.4;
+    const m = MODES[idx('2.4+')]; b.modeIndex = m.index; b.freq = m.freq; b.pan = 0.4;
+    s.amps[m.index] = b.bowing ? 0.7 : 0.2;
+    const L = [sp('2.4+', [20], 4), sp('1.3+', [10], 3), sp('1.2+', [5], 2)];
+    L.forEach((x, i) => { s.species[i] = x; s.amps[idx(x.id)] += 0.25; }); s.nSpecies = 3;
+    s.total = 0.9; s.stable = now;
+  };
+}
+
+// --- drawing ----------------------------------------------------------------------------------
+function drawWave(canvas, buf) {
+  const w = canvas.width = canvas.clientWidth * 2, h = canvas.height = canvas.clientHeight * 2;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#070605'; g.fillRect(0, 0, w, h);
+  const L = buf.getChannelData(0), R = buf.getChannelData(1), n = L.length, per = n / w;
+  g.strokeStyle = 'rgba(226,184,102,.12)'; g.beginPath(); g.moveTo(0, h / 2); g.lineTo(w, h / 2); g.stroke();
+  for (const [lim, col] of [[0.9, 'rgba(224,122,95,.35)']]) { g.fillStyle = col; g.fillRect(0, h / 2 - lim * h / 2, w, 1); g.fillRect(0, h / 2 + lim * h / 2, w, 1); }
+  g.fillStyle = '#d9b26a';
+  for (let x = 0; x < w; x++) {
+    let mn = 0, mx = 0;
+    for (let i = Math.floor(x * per); i < Math.floor((x + 1) * per); i++) { const v = (L[i] + R[i]) * 0.5; if (v < mn) mn = v; if (v > mx) mx = v; }
+    g.fillRect(x, h / 2 - mx * h / 2, 1, Math.max(1, (mx - mn) * h / 2));
+  }
+}
+
+function drawSpectrogram(canvas, buf, events) {
+  const w = canvas.width, h = canvas.height, g = canvas.getContext('2d');
+  g.fillStyle = '#070605'; g.fillRect(0, 0, w, h);
+  const L = buf.getChannelData(0), R = buf.getChannelData(1), n = L.length;
+  const top = 50, bottom = 60, H = h - top - bottom;
+  const re = new Float32Array(N), im = new Float32Array(N);
+  const fLo = 25, fHi = 12000, lg = Math.log(fHi / fLo);
+  const img = g.createImageData(w, H);
+  const cols = w, hop = (n - N) / cols;
+  for (let x = 0; x < cols; x++) {
+    const s = Math.floor(x * hop);
+    for (let i = 0; i < N; i++) { re[i] = (L[s + i] + R[s + i]) * 0.5 * HANN[i]; im[i] = 0; }
+    fft(re, im);
+    for (let y = 0; y < H; y++) {
+      const f = fLo * Math.exp((1 - y / H) * lg), k = Math.min(N / 2 - 1, Math.round(f * N / SR));
+      const m = Math.hypot(re[k], im[k]) / (N / 4);       // a full-scale sine reads 0 dB
+      const v = Math.max(0, Math.min(1, (db(m + 1e-9) + 96) / 84));
+      const o = (y * w + x) * 4;
+      img.data[o] = 255 * Math.min(1, v * 1.6); img.data[o + 1] = 210 * Math.pow(v, 1.6); img.data[o + 2] = 120 * Math.pow(v, 3) + 18 * v; img.data[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, top);
+  g.font = '20px ui-monospace, Menlo, monospace'; g.fillStyle = '#7a6d5a';
+  for (const f of [55, 110, 220, 440, 880, 1760, 3520, 7040]) {
+    const y = top + (1 - Math.log(f / fLo) / lg) * H;
+    g.fillStyle = 'rgba(7,6,5,.78)'; g.fillRect(0, y - 13, 112, 24);
+    g.fillStyle = '#b9ab92'; g.fillRect(0, y, 10, 1); g.fillText(f + ' Hz', 16, y + 6);
+  }
+  // level strip
+  const lvlY = h - bottom + 10, lvlH = bottom - 18;
+  g.fillStyle = 'rgba(224,122,95,.4)'; g.fillRect(0, lvlY + lvlH * (1 - 0.9), w, 1);
+  g.fillStyle = '#d9b26a';
+  for (let x = 0; x < w; x++) {
+    let mx = 0;
+    for (let i = Math.floor(x * n / w); i < Math.floor((x + 1) * n / w); i++) mx = Math.max(mx, Math.abs(L[i]), Math.abs(R[i]));
+    g.fillRect(x, lvlY + lvlH * (1 - mx), 1, lvlH * mx);
+  }
+  g.fillStyle = '#e8dcc4'; g.strokeStyle = 'rgba(232,220,196,.35)';
+  events.forEach(([t, label], i) => {
+    const x = t / (n / SR) * w, y = i % 2 ? 42 : 19;           // two staggered rows of labels
+    g.beginPath(); g.moveTo(x, y + 4); g.lineTo(x, h - bottom + 6); g.stroke();
+    g.fillText(label, x + 4, y);
+  });
+}
+
+function card(host, title, a, extra, buf) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  const pass = a.peak < 0.9 && a.nan === 0 && Math.abs(a.dc) < 0.002 && a.loud > 1e-3 && extra.ok !== false;
+  el.innerHTML = `<div class="row"><span class="name">${title}</span><span class="${pass ? 'pass' : 'fail'}">${pass ? 'ok' : 'check'}</span></div><canvas></canvas>
+    <div class="m"><span>peak <b>${fmtDb(a.peak)}</b> dB</span><span>rms <b>${fmtDb(a.rms)}</b></span><span>loud <b>${fmtDb(a.loud)}</b></span><span>centroid <b>${a.centroid.toFixed(0)}</b> Hz</span><span>dc <b>${a.dc.toExponential(1)}</b></span><span>tail <b>${fmtDb(a.tail)}</b></span>${extra.html || ''}</div>`;
+  host.appendChild(el);
+  drawWave(el.querySelector('canvas'), buf);
+  el.onclick = () => {
+    const ac = window.__ac || (window.__ac = new AudioContext());
+    const s = ac.createBufferSource(); s.buffer = buf; s.connect(ac.destination); s.start();
+  };
+  return pass;
+}
+
+// --- run ----------------------------------------------------------------------------------------
+const report = { oneShots: [], continuous: [], mix: null, typical: null, failures: [], unity: null, dcWindows: null };
+const status = document.getElementById('status');
+
+// the master chain must be unity below threshold (compressor makeup compensated)
+async function chainGain(amp) {
+  const oc = new OfflineAudioContext(2, SR, SR);
+  const E = createEngine(oc, { fadeIn: 0 });
+  E.start(0, 0, false);
+  const o = oc.createOscillator(); o.frequency.value = 440;
+  const g = oc.createGain(); g.gain.value = amp;
+  o.connect(g); g.connect(E.master); o.start(0);
+  const b = await oc.startRendering(), d = b.getChannelData(0);
+  let p = 0; for (let i = SR / 2; i < d.length; i++) p = Math.max(p, Math.abs(d[i]));
+  return { in: amp, out: p, gainDb: 20 * Math.log10(p / amp) };
+}
+try {
+  report.unity = [await chainGain(0.01), await chainGain(0.1), await chainGain(0.5), await chainGain(2)];
+  if (Math.abs(report.unity[0].gainDb) > 0.5) report.failures.push('chain not unity');
+  // mixed scene first (the headline)
+  if (!only || only === 'mix') {
+    const trace = { nodes: [], red: [], shots: [] };
+    const t0 = performance.now();
+    const { buf, E } = await renderScene(12, mixedScript(), { room: true, step: 1 / 60, trace: (now, E) => { trace.nodes.push(E.nodes); trace.red.push(E.compressor.reduction); trace.shots.push(E.oneShots); } });
+    const a = analyze(buf);
+    const perSec = [];
+    for (let s = 0; s < 12; s++) {
+      const L = buf.getChannelData(0).subarray(s * SR, (s + 1) * SR), R = buf.getChannelData(1).subarray(s * SR, (s + 1) * SR);
+      let e = 0, p = 0; for (let i = 0; i < L.length; i++) { e += L[i] * L[i] + R[i] * R[i]; p = Math.max(p, Math.abs(L[i]), Math.abs(R[i])); }
+      perSec.push({ s, rms: Math.sqrt(e / (2 * L.length)), peak: p });
+    }
+    const maxNodes = Math.max(...trace.nodes), minRed = Math.min(...trace.red);
+    report.mix = { ...a, perSec, maxNodes, maxShots: Math.max(...trace.shots), maxReductionDb: minRed, ms: performance.now() - t0 };
+    drawSpectrogram(document.getElementById('spec'), buf, MIX_EVENTS);
+    document.getElementById('mixinfo').innerHTML = `<div><table><tr><th>second</th><th>rms dB</th><th>peak dB</th></tr>${perSec.map((p) => `<tr><td>${p.s}–${p.s + 1}</td><td>${fmtDb(p.rms)}</td><td>${fmtDb(p.peak)}</td></tr>`).join('')}</table></div>
+      <div><table><tr><th>measure</th><th>value</th></tr>
+      <tr><td>peak</td><td class="${a.peak < 0.9 ? 'pass' : 'fail'}">${a.peak.toFixed(3)} (${fmtDb(a.peak)} dB)</td></tr>
+      <tr><td>rms</td><td>${fmtDb(a.rms)} dB</td></tr><tr><td>loudest 50 ms</td><td>${fmtDb(a.loud)} dB</td></tr>
+      <tr><td>spectral centroid</td><td>${a.centroid.toFixed(0)} Hz</td></tr><tr><td>dc offset</td><td>${a.dc.toExponential(2)}</td></tr>
+      <tr><td>NaN samples</td><td class="${a.nan ? 'fail' : 'pass'}">${a.nan}</td></tr><tr><td>max nodes</td><td>${maxNodes}</td></tr>
+      <tr><td>max one-shot voices</td><td>${report.mix.maxShots}</td></tr><tr><td>compressor meter (approx, max)</td><td>${minRed.toFixed(1)} dB</td></tr>
+      <tr><td>render time</td><td>${report.mix.ms.toFixed(0)} ms</td></tr></table></div>`;
+    if (a.peak >= 0.9 || a.nan || Math.abs(a.dc) > 0.002) report.failures.push('mix');
+    // typical scene node budget
+    const tn = [], tr = [];
+    const typ = await renderScene(6, typicalScript(), { room: true, trace: (now, E) => { tn.push(E.nodes); tr.push(E.compressor.reduction); } });
+    tn.sort((x, y) => x - y);
+    report.typical = { median: tn[tn.length >> 1], max: tn[tn.length - 1], maxReductionDb: Math.min(...tr), ...analyze(typ.buf, 0.5) };
+  }
+  if (!only || only === 'cont') {
+    const host = document.getElementById('cont');
+    for (const [name, dur, script, opt] of CONTINUOUS) {
+      const { buf } = await renderScene(dur, script, { room: !!opt?.room });
+      const a = analyze(buf, 0.05);
+      report.continuous.push({ name, ...a });
+      if (name === 'floor bloom') {
+        const L = buf.getChannelData(0); report.dcWindows = [];
+        for (let s = 0; s + SR <= L.length; s += SR) { let m = 0; for (let i = s; i < s + SR; i++) m += L[i]; report.dcWindows.push(+(m / SR).toExponential(2)); }
+      }
+      if (!card(host, name, a, {}, buf)) report.failures.push(name);
+    }
+  }
+  if (!only || only === 'shots') {
+    const host = document.getElementById('grid');
+    for (const [name, p, dur, label] of ONE_SHOTS) {
+      const r = await renderOneShot(name, p, dur);
+      const a = analyze(r.buf);
+      const ok = r.played && r.leaked === 0 && r.nodesLeft === 0;
+      report.oneShots.push({ name: label || name, ...a, played: r.played, leaked: r.leaked, nodesLeft: r.nodesLeft });
+      if (!card(host, label || name, a, { ok, html: `<span>freed <b class="${ok ? 'pass' : 'fail'}">${ok ? 'yes' : `${r.leaked}/${r.nodesLeft}`}</b></span>` }, r.buf)) report.failures.push(label || name);
+    }
+  }
+  status.textContent = report.failures.length ? `done · ${report.failures.length} to check: ${report.failures.join(', ')}` : 'done · all clear';
+} catch (e) {
+  console.error(e);
+  report.error = String(e && e.stack || e);
+  status.textContent = 'error: ' + e;
+}
+window.__report = report;
+</script>

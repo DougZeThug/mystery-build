@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Notebook harness</title>
+<link rel="stylesheet" href="../styles/main.css">
+<style>
+  #dev { position: fixed; left: 8px; top: 8px; z-index: 10; display: flex; gap: 6px; flex-wrap: wrap; font: 12px/1.2 system-ui, sans-serif; }
+  #dev button, #dev a { background: #241c16; color: #cdb995; border: 1px solid #4a3a2c; border-radius: 3px; padding: 4px 8px; cursor: pointer; text-decoration: none; }
+  body.shot #dev { display: none; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="fx"></canvas>
+<div id="ui"></div>
+<div id="dev">
+  <button data-open="">open</button>
+  <button data-open="keeper">her notes</button>
+  <button data-open="specimens">specimens</button>
+  <button data-open="observations">observations</button>
+  <button id="ev">random event</button>
+  <a href="?scenario=fresh">fresh</a><a href="?scenario=mid">mid</a><a href="?scenario=full">full</a>
+</div>
+<script type="module">
+// Standalone notebook harness: a fake game with a believable history, a painted stand-in for the
+// room behind the book, and hooks for screenshots (window.__journal, window.__game, window.__events).
+import { bus } from '../src/core/bus.js';
+import { computeView } from '../src/core/view.js';
+import { createJournal } from '../src/ui/journal.js';
+import { figureCanvas } from '../src/render/gl.js';
+import { nameFor, noteFor, speciesRatioText } from '../src/sim/naming.js';
+import { modeById } from '../src/sim/modes.js';
+import { clanOf } from '../src/sim/harmony.js';
+
+const params = new URLSearchParams(location.search);
+const scenario = params.get('scenario') || 'full';
+if (params.has('shot')) document.body.classList.add('shot');
+
+// --- the room, roughly: felt, lamp, bronze, sand --------------------------------------------------
+const view = computeView(innerWidth, innerHeight, Math.min(2, devicePixelRatio || 1));
+function paintRoom() {
+  const c = document.getElementById('gl'), dpr = view.dpr;
+  c.width = innerWidth * dpr; c.height = innerHeight * dpr; c.style.width = innerWidth + 'px'; c.style.height = innerHeight + 'px';
+  const g = c.getContext('2d'); g.scale(dpr, dpr);
+  g.fillStyle = '#0a0807'; g.fillRect(0, 0, innerWidth, innerHeight);
+  const p = view.plate;
+  const rg = g.createRadialGradient(p.cx, p.cy - p.size * 0.1, 10, p.cx, p.cy, p.size * 0.95);
+  rg.addColorStop(0, 'rgba(255,214,150,0.26)'); rg.addColorStop(1, 'rgba(255,214,150,0)');
+  g.fillStyle = rg; g.fillRect(0, 0, innerWidth, innerHeight);
+  const bg = g.createLinearGradient(p.x, p.y, p.x + p.size, p.y + p.size);
+  bg.addColorStop(0, '#c79a55'); bg.addColorStop(1, '#7a5528');
+  g.fillStyle = bg; g.fillRect(p.x, p.y, p.size, p.size);
+  g.fillStyle = 'rgba(233,223,200,0.85)';
+  for (let i = 0; i < 9000; i++) {
+    const u = Math.random() * 2 - 1, v = Math.random() * 2 - 1;
+    const f = Math.cos(Math.PI * (u + 1) / 2 * 2) * Math.cos(Math.PI * (v + 1) / 2 * 5) + Math.cos(Math.PI * (u + 1) / 2 * 5) * Math.cos(Math.PI * (v + 1) / 2 * 2);
+    if (Math.abs(f) > 0.12) continue;
+    g.fillRect(p.cx + u * p.size / 2, p.cy + v * p.size / 2, 1.2, 1.2);
+  }
+  const a = view.anchors.journal;
+  g.save(); g.translate(a.x, a.y); g.rotate(-0.16); g.fillStyle = '#4b2c1a'; g.fillRect(-45, -64, 90, 128); g.restore();
+}
+paintRoom();
+
+// --- a believable history ---------------------------------------------------------------------------
+const DAY = 86400000;
+const now = Date.now();
+const d0 = new Date(now - 3 * DAY); d0.setHours(20, 4, 0, 0);
+const created = d0.getTime();
+const state = {
+  v: 1, created, lastVisit: now, visits: 4, playSeconds: 5400,
+  plate: { fatigue: 0, cracks: [], wear: null }, species: {}, seen: {}, log: [],
+  stats: { births: 0, deaths: 0, fusions: 0, devoured: 0, fell: 0, choirs: 0, cracks: 0, heals: 0, maxPop: 0, splits: 0 },
+};
+const game = { t: 0, dt: 0, bus, debug: true, view, state, light: { on: true, level: 1 }, fx: {}, hold: null,
+  gfx: { figureCanvas: (comps, px) => figureCanvas(comps, px) },
+  life: { motes: [], count: 0, populations: () => pops, species: {} },
+  field: { coherence: { stable: 0 } },
+};
+let pops = [];
+window.__game = game;
+
+const journal = createJournal(game, document.getElementById('ui'));
+game.journal = journal;
+window.__journal = journal;
+
+const realNow = Date.now;
+function at(t, fn) { Date.now = () => t; try { fn(); } finally { Date.now = realNow; } }
+function species(comps, opts = {}) {
+  const ms = comps.map(modeById);
+  const nm = nameFor(comps, !!opts.aurata, opts.variant || 0);
+  const id = comps.join('|') + (opts.aurata ? '*' : '');
+  const sp = { id, comps, ks: ms.map((m) => m.k), clan: clanOf(ms[0].k), name: nm.name, genus: nm.genus, epithet: nm.epithet,
+    aurata: !!opts.aurata, parents: opts.parents || null, gen: opts.gen || 0 };
+  return sp;
+}
+function record(sp, t, extra = {}) {
+  const parentNames = sp.parents && sp.parents[0] !== sp.parents[1] ? sp.parents.map((p) => state.species[p]?.name).filter(Boolean).join(' × ') : null;
+  const r = { id: sp.id, comps: sp.comps, ks: sp.ks, name: sp.name, genus: sp.genus, epithet: sp.epithet, clan: sp.clan,
+    firstSeen: t, peak: extra.peak || 3, count: extra.count ?? 2, extinct: !!extra.extinct, note: '', parents: sp.parents,
+    parentNames, gen: sp.gen, aurata: sp.aurata, ratio: speciesRatioText(sp),
+    stats: { births: 4, splits: extra.splits || 1, fusions: extra.fusions || 0, devoured: extra.devoured || 0, eaten: extra.eaten || 0,
+      fell: extra.fell || 0, ageDeaths: extra.ageDeaths || 0, hungerDeaths: extra.hungerDeaths || 0, lifeSum: 0, mutants: 0, returns: 0, nestles: 0, choirs: 0 } };
+  r.note = noteFor(sp, r, state.stats);
+  return r;
+}
+const mote = (sp) => ({ sp: sp.id, spec: sp });
+// play an event at a given moment, keeping the stats the way progress.js would
+function ev(t, type, payload) {
+  at(t, () => {
+    const st = state.stats;
+    if (type === 'mote:birth') st.births++;
+    if (type === 'mote:fuse') st.fusions++;
+    if (type === 'mote:eat') st.devoured++;
+    if (type === 'mote:death') { st.deaths++; if (payload.cause === 'fall') st.fell++; if (payload.cause === 'age') state.seen.firstGold = true; }
+    if (type === 'plate:crack') { st.cracks++; state.seen.firstCrack = true; }
+    if (type === 'plate:heal') { st.heals++; state.seen.firstHeal = true; }
+    if (type === 'life:choir' && payload.on) { st.choirs++; state.seen.firstChoir = true; state.seen.choir = true; }
+    if (type === 'light' && !payload.on) state.seen.firstDark = true;
+    if (type === 'life:floor' && payload.on) state.seen.floor = true;
+    bus.emit(type, payload);
+    journal.update(0.6);
+  });
+}
+function born(t, sp, extra) {
+  const isNew = !state.species[sp.id];
+  if (isNew) { state.species[sp.id] = record(sp, t, extra); at(t, () => bus.emit('species:new', { species: sp })); }
+  ev(t, 'mote:birth', { mote: mote(sp), species: sp, isNew });
+  state.seen.firstBirth = true;
+}
+const min = 60000;
+let t = created + 6 * min;
+const step = (m) => (t += m * min);
+
+ev(t, 'bow:start', { edge: 'right', t: 0.4 });
+game.field.coherence.stable = 4; at(step(1.5), () => journal.update(0.6)); game.field.coherence.stable = 0;
+const A = species(['1.2+']), B = species(['1.3-']), C = species(['2.4+']), D = species(['1.5+']), E = species(['2.3-']);
+born(step(4), A, { peak: 14, count: 6, ageDeaths: 3, splits: 6 });
+ev(step(0.2), 'reveal', { what: 'journal' });
+born(step(9), B, { peak: 9, count: 4, devoured: 3 });
+ev(step(2), 'mote:split', { parent: mote(A), child: mote(A) });
+ev(step(3), 'reveal', { what: 'jar' });
+if (scenario !== 'fresh') {
+  born(step(14), C, { peak: 5, count: 0, extinct: true, eaten: 4 });
+  ev(step(6), 'mote:eat', { pred: mote(B), prey: mote(C) });
+  const AB = species(['1.2+', '1.3-'], { parents: [A.id, B.id], gen: 1 });
+  state.species[AB.id] = record(AB, step(11), { peak: 4, count: 2, fusions: 1 });
+  at(t, () => bus.emit('species:new', { species: AB }));
+  ev(t, 'mote:fuse', { a: mote(A), b: mote(B), child: mote(AB), species: AB, isNew: true });
+  ev(step(4), 'mote:death', { mote: mote(A), cause: 'age' });
+  ev(step(3), 'mote:death', { mote: mote(C), cause: 'eaten' });
+  ev(step(0.5), 'species:extinct', { species: C });
+  ev(step(20), 'reveal', { what: 'drawer' });
+  t = new Date(created + DAY).setHours(15, 12, 0, 0);   // the next afternoon
+  born(t, D, { peak: 7, count: 3, hungerDeaths: 2 });
+  ev(step(7), 'light', { on: false });
+  ev(step(12), 'mote:death', { mote: mote(D), cause: 'fall' });
+  ev(step(25), 'plate:crack', { crack: 0 });
+  state.plate.cracks.push({ pts: [[1, 0.2], [0.8, 0.25]], gold: [0], healed: false });
+  born(step(30), E, { peak: 3, count: 0, extinct: true });
+  ev(step(8), 'mote:death', { mote: mote(E), cause: 'hunger' });
+  ev(step(1), 'species:extinct', { species: E });
+}
+if (scenario === 'full') {
+  t = new Date(created + 2 * DAY).setHours(21, 40, 0, 0);
+  ev(t, 'plate:heal', { crack: 0 });
+  state.plate.cracks[0].healed = true;
+  const Au = species(['1.2+'], { aurata: true });
+  born(step(9), Au, { peak: 2, count: 1 });
+  const F = species(['2.2+']), G = species(['1.3+']), H = species(['2.6+']);
+  born(step(14), F, { peak: 8, count: 5 });
+  born(step(6), G, { peak: 6, count: 3 });
+  born(step(18), H, { peak: 4, count: 2 });
+  ev(step(10), 'life:choir', { on: true, species: [A.id, F.id, G.id] });
+  const chord = species(['1.2+', '1.3+', '2.4+'], { parents: [A.id + '|' + G.id, C.id], gen: 2 });
+  state.species[chord.id] = record(chord, step(16), { peak: 2, count: 1, fusions: 2 });
+  at(t, () => bus.emit('species:new', { species: chord }));
+  ev(t, 'mote:fuse', { a: mote(G), b: mote(A), child: mote(chord), species: chord, isNew: true });
+  ev(step(4), 'moth', { state: 'arrive' });
+  ev(step(2), 'moth', { state: 'land' });
+  game.hold = { u: 0.2, v: 0.1, t: 0 }; game.life.motes = [{ state: 'nestle' }]; at(step(5), () => journal.update(0.6)); game.hold = null; game.life.motes = [];
+  ev(step(30), 'life:floor', { on: true });
+  ev(step(1), 'log', { kind: 'dream', text: 'In the dark the sand moved by itself, into a figure I had not seen in some time.' });
+  t = now - 40 * min;
+  ev(t, 'log', { kind: 'away', text: 'While you were away: two generations passed.' });
+  ev(step(0.01), 'log', { kind: 'away', text: 'They numbered eleven when you left; there are now fourteen.' });
+  for (let i = 0; i < 18; i++) ev(step(1.5), 'mote:fuse', { a: mote(A), b: mote(F), child: mote(A), species: A, isNew: false });
+  for (let i = 0; i < 12; i++) ev(step(0.5), 'mote:eat', { pred: mote(B), prey: mote(D) });
+}
+// living counts the life module would report
+pops = Object.values(state.species).filter((r) => !r.extinct).map((r) => ({ id: r.id, count: r.count }));
+game.life.count = pops.reduce((a, p) => a + p.count, 0);
+journal.update(0.6);
+(state.notebook ||= {}).opened = params.has('first') ? 0 : 1;
+window.__events = { ev, born, species };
+
+// live counts drift while the book is open
+setInterval(() => { for (const p of pops) p.count = Math.max(1, p.count + (Math.random() < 0.5 ? -1 : 1)); }, 1500);
+let last = performance.now();
+(function frame(nowT) { requestAnimationFrame(frame); const dt = Math.min(0.05, (nowT - last) / 1000 || 0); last = nowT; game.t += dt; journal.update(dt); })(last);
+
+for (const b of document.querySelectorAll('[data-open]')) b.addEventListener('click', () => journal.open(b.dataset.open || undefined));
+document.getElementById('ev').addEventListener('click', () => {
+  const sp = species(['3.4+']);
+  born(Date.now(), sp, { peak: 1, count: 1 });
+});
+if (params.has('open')) journal.open(params.get('open') || undefined);
+</script>
+</body>
+</html>

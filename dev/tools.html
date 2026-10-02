@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>tools harness</title>
+<link rel="stylesheet" href="../styles/main.css">
+<style>
+  #bg { z-index: 0; }
+  #panel { position: fixed; top: 8px; left: 8px; z-index: 5; max-width: 300px; padding: 8px 10px; border-radius: 4px;
+    background: rgba(12, 10, 8, 0.85); border: 1px solid #2a231c; color: #cdbfa5; font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+  #panel button { background: #1a1511; color: inherit; border: 1px solid #3a2f24; border-radius: 3px; padding: 1px 6px; font: inherit; cursor: pointer; margin: 1px; }
+  #panel #stat { color: #8a7d68; white-space: pre; margin-top: 4px; }
+  #panel.hide { display: none; }
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<canvas id="fx"></canvas>
+<div id="ui"></div>
+<div id="panel">
+  <div>
+    <button data-a="reveal">reveal all</button><button data-a="drawer">drawer</button><button data-a="moth">moth</button>
+    <button data-a="light">light</button><button data-a="singers">+singers</button><button data-a="hide">hide</button>
+  </div>
+  <div id="stat"></div>
+</div>
+<script type="module">
+// Tools harness: the real field, sand, life and tools on a cheap 2D plate (no WebGL, no audio unless
+// ?audio), so interactions can be exercised quickly.
+//   ?reveal (all objects)  ?moth (summon it)  ?dark  ?clean (no panel)  ?nobg / ?norender (profiling)
+// Headless note: under swiftshader GPU flags this 2D-only page can stall rAF; run Chromium with
+// --disable-gpu for it (the WebGL app itself needs the swiftshader flags).
+import { bus } from '../src/core/bus.js';
+import { makeRng } from '../src/core/rng.js';
+import { computeView } from '../src/core/view.js';
+import { newState } from '../src/core/persist.js';
+import { createField } from '../src/sim/field.js';
+import { createSand } from '../src/sim/sand.js';
+import { createLife } from '../src/sim/life.js';
+import { createTools } from '../src/ui/tools.js';
+
+const q = new URLSearchParams(location.search);
+const bg = document.getElementById('bg'), fx = document.getElementById('fx');
+const bctx = bg.getContext('2d'), fctx = fx.getContext('2d');
+const state = newState();
+const field = createField({ state, bus, rng: makeRng(5) });
+const sand = createSand(field, { state, bus });
+sand.seedScatter(15000);
+const game = { t: 0, dt: 0, rng: makeRng(9), bus, debug: true, view: null, state, field, sand, life: null,
+  light: { on: !q.has('dark'), level: q.has('dark') ? 0 : 1, flicker: 0 }, fx: { choir: 0, floor: 0, shake: 0, flash: 0 },
+  hold: null, wear: new Uint8Array(128 * 128), WEAR: 128, wearVersion: 0, audio: null, journal: { open() { console.log('journal.open'); }, isOpen: false } };
+game.life = createLife(game);
+function resize() {
+  const dpr = Math.min(2, devicePixelRatio || 1), vw = innerWidth, vh = innerHeight;
+  game.view = computeView(vw, vh, dpr);
+  for (const c of [bg, fx]) { c.width = Math.round(vw * dpr); c.height = Math.round(vh * dpr); c.style.width = vw + 'px'; c.style.height = vh + 'px'; }
+  bus.emit('resize', game.view);
+}
+resize();
+addEventListener('resize', resize);
+game.tools = createTools(game);
+window.__sp = game;
+if (q.has('audio')) import('../src/audio/audio.js').then((m) => { game.audio = m.createAudio(game); });
+const all = ['jar', 'journal', 'drawer', 'dampers', 'forks', 'phonograph', 'cord'];
+if (q.has('reveal')) all.forEach((w) => game.tools.reveal(w, true));
+if (q.has('clean')) document.getElementById('panel').classList.add('hide');
+
+fx.addEventListener('pointerdown', (e) => { bus.emit('start', {}); if (game.tools.pointerDown(e.clientX, e.clientY, e)) { try { fx.setPointerCapture(e.pointerId); } catch {} e.preventDefault(); } });
+fx.addEventListener('pointermove', (e) => { game.tools.pointerMove(e.clientX, e.clientY, e); fx.style.cursor = game.tools.cursor(e.clientX, e.clientY); });
+fx.addEventListener('pointerup', (e) => game.tools.pointerUp(e.clientX, e.clientY, e));
+fx.addEventListener('pointercancel', (e) => game.tools.pointerUp(e.clientX, e.clientY, e));
+addEventListener('keydown', (e) => game.tools.key(e));
+
+document.getElementById('panel').addEventListener('click', (e) => {
+  const a = e.target.dataset.a;
+  if (a === 'reveal') all.forEach((w) => game.tools.reveal(w));
+  if (a === 'drawer') game.tools.openDrawer(!game.tools.trayOpen);
+  if (a === 'moth') game.tools._dev.summonMoth();
+  if (a === 'light') game.tools._dev.cord.toggle();
+  if (a === 'singers') for (let i = 0; i < 6; i++) game.life.spawn?.([['2.3+', '1.4-', '3.4+'][i % 3]], (Math.random() - 0.5) * 1.2, (Math.random() - 0.5) * 1.2, 0.8);
+  if (a === 'hide') document.getElementById('panel').classList.add('hide');
+});
+
+// a cheap plate: felt, a lamp pool, bronze, the sand density texture, singer dots
+const sc = document.createElement('canvas'); sc.width = sc.height = sand.D || 256;
+const sg = sc.getContext('2d'); const img = sg.createImageData(sc.width, sc.height);
+let bgN = 0;
+function drawBg() {
+  const v = game.view, p = v.plate, dpr = v.dpr, L = game.light.level, u = v.unit;
+  bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  bctx.fillStyle = '#0a0807'; bctx.fillRect(0, 0, v.vw, v.vh);
+  const lx = p.cx - p.size * 0.08, ly = p.cy - p.size * 0.14;
+  const g = bctx.createRadialGradient(lx, ly, 0, lx, ly, p.size * 0.95);
+  g.addColorStop(0, `rgba(120,86,50,${0.55 * L})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+  bctx.fillStyle = g; bctx.fillRect(0, 0, v.vw, v.vh);
+  bctx.fillStyle = `rgb(${40 + 120 * L | 0},${28 + 82 * L | 0},${14 + 40 * L | 0})`; bctx.fillRect(p.x, p.y, p.size, p.size);
+  if ((bgN++ & 3) === 0 && sand.texture) {
+    const t = sand.texture(), d = img.data;
+    for (let i = 0; i < d.length; i += 4) { d[i] = 236; d[i + 1] = 226; d[i + 2] = 204; d[i + 3] = Math.min(255, t[i] * 1.6); }
+    sg.putImageData(img, 0, 0);
+  }
+  bctx.globalAlpha = 0.2 + 0.8 * L; bctx.drawImage(sc, p.x, p.y, p.size, p.size); bctx.globalAlpha = 1;
+  bctx.fillStyle = '#ffe9b0';
+  for (const m of game.life.motes || []) { bctx.beginPath(); bctx.arc(p.cx + m.u * u, p.cy + m.v * u, (m.r || 0.04) * u, 0, 7); bctx.fill(); }
+}
+
+let last = performance.now();
+const stat = document.getElementById('stat');
+function frame(now) {
+  requestAnimationFrame(frame);
+  let dt = Math.min(1 / 20, Math.max(0.001, (now - last) / 1000)); last = now;
+  game.t += dt; game.dt = dt;
+  const L = game.light; L.level += ((L.on ? 1 : 0) - L.level) * Math.min(1, dt * 3); L.flicker *= Math.exp(-dt * 3);
+  game.tools.update(dt);
+  game.field.setSource('chorus', game.life.chorus?.() || []);
+  game.field.update(dt); game.sand.update(dt); game.life.update(dt);
+  game.audio?.update?.(dt);
+  if (!q.has('nobg')) drawBg();
+  fctx.setTransform(1, 0, 0, 1, 0, 0); fctx.clearRect(0, 0, fx.width, fx.height);
+  fctx.setTransform(game.view.dpr, 0, 0, game.view.dpr, 0, 0);
+  if (!q.has('norender')) game.tools.render(fctx, game.view.vw, game.view.vh);
+  const b = game.tools.bow, c = field.coherence;
+  stat.textContent = `bow ${b.held ? 'held' : '-'} ${b.bowing ? 'BOWING ' + b.edge + ' t' + b.t.toFixed(2) : ''}\n` +
+    `speed ${b.speed01.toFixed(2)} mode ${b.mode || '-'}\nfield ${field.total.toFixed(2)} dom ${c.dominant || '-'} ${c.share.toFixed(2)} stable ${c.stable.toFixed(1)}\n` +
+    `sand ${sand.n} dampers ${field.dampers.length} hold ${game.hold ? 'yes' : '-'}`;
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

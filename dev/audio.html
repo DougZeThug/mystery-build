@@ -1,0 +1,331 @@
+<!doctype html><meta charset="utf-8"><title>audio harness</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; --bg: #0d0b09; --panel: #15110d; --line: #2a221a; --ink: #b9ab92; --dim: #75685a; --hot: #e2b866; --hi: #efe3c8; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; }
+  main { max-width: 1280px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-bottom: 12px; }
+  h1 { font-size: 14px; font-weight: 600; color: var(--hot); margin: 0; letter-spacing: .04em; }
+  #stats { color: var(--dim); white-space: pre; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr 1.15fr; gap: 12px; }
+  @media (max-width: 1000px) { .cols { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 680px) { .cols { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 10px 12px 12px; }
+  h2 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--hot); letter-spacing: .08em; text-transform: uppercase; display: flex; justify-content: space-between; align-items: baseline; }
+  h2 small { color: var(--dim); text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .row { display: grid; grid-template-columns: 74px 1fr 52px; align-items: center; gap: 8px; margin: 5px 0; }
+  #modes .row { grid-template-columns: 104px 1fr 44px; }
+  .row label { color: var(--dim); }
+  .row output { text-align: right; color: var(--hi); }
+  input[type=range] { width: 100%; accent-color: #c99a52; }
+  select, input[type=text] { width: 100%; background: #0f0c09; color: var(--hi); border: 1px solid var(--line); border-radius: 3px; padding: 3px 5px; font: inherit; }
+  button { background: #1e1812; color: var(--hi); border: 1px solid #3a2e21; border-radius: 4px; padding: 6px 8px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #6b5233; background: #261e15; }
+  button:active, button.on { background: #3a2c19; border-color: #c99a52; color: #fff4dc; }
+  #start { padding: 7px 14px; border-color: #c99a52; color: var(--hot); }
+  .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 5px; }
+  .shots h3 { grid-column: 1 / -1; margin: 6px 0 0; font-size: 10px; color: var(--dim); font-weight: 400; letter-spacing: .08em; text-transform: uppercase; }
+  .species { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr 22px; gap: 6px; align-items: center; margin: 4px 0; }
+  .species .x { padding: 2px 0; }
+  .hint { color: var(--dim); margin-top: 6px; }
+  .toggles { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  canvas { display: block; width: 100%; height: 220px; background: #070605; border: 1px solid var(--line); border-radius: 4px; margin-top: 12px; }
+  .readout { color: var(--hi); margin: 4px 0 2px; min-height: 1.45em; }
+</style>
+<main>
+  <header>
+    <h1>stillpoint · audio harness</h1>
+    <button id="start">start sound</button>
+    <button id="mute">mute</button>
+    <span id="stats">idle</span>
+  </header>
+  <div class="cols">
+    <div>
+      <section>
+        <h2>plate <small>modes driven directly</small></h2>
+        <div id="modes"></div>
+        <div class="row"><label>cracks</label><input id="cracks" type="range" min="0" max="5" step="1" value="0"><output id="cracksV">0</output></div>
+        <div class="hint">each unhealed crack detunes the plate by 0.6%: the tone sags and a ghost beats against it</div>
+      </section>
+      <section style="margin-top:12px">
+        <h2>bow <small>hold the button to bow</small></h2>
+        <div class="row"><label>edge</label><select id="edge"><option>right</option><option>top</option><option>left</option><option>bottom</option></select><span></span></div>
+        <div class="row"><label>position</label><input id="bowT" type="range" min="0" max="1" step="0.01" value="0.31"><output id="bowTV"></output></div>
+        <div class="row"><label>speed</label><input id="speed" type="range" min="0" max="1" step="0.01" value="0.3"><output id="speedV"></output></div>
+        <div class="toggles"><button id="bow">bow (hold)</button><button id="bowLatch">latch</button></div>
+        <div class="readout" id="bowInfo"></div>
+      </section>
+    </div>
+    <div>
+      <section>
+        <h2>singers <small>comps · count · energy · centroid</small></h2>
+        <div id="species"></div>
+        <div class="toggles">
+          <button data-preset="octave">octave clan</button><button data-preset="thirteen">13 clan</button>
+          <button data-preset="floor">the floor chain</button><button data-preset="discord">discord</button>
+          <button data-preset="aurata">aurata</button><button data-preset="none">none</button>
+        </div>
+        <div class="toggles"><button id="chorus" class="on">they sing into the plate</button></div>
+      </section>
+      <section style="margin-top:12px">
+        <h2>room</h2>
+        <div class="toggles"><button id="dark">light off</button><button id="hold">resting finger</button><button id="pour">pour sand (hold)</button></div>
+        <div class="row"><label>choir</label><input id="choir" type="range" min="0" max="1" step="0.01" value="0"><output id="choirV">0</output></div>
+        <div class="row"><label>floor</label><input id="floor" type="range" min="0" max="1" step="0.01" value="0"><output id="floorV">0</output></div>
+        <div class="row"><label>sand</label><input id="sandN" type="range" min="0" max="26000" step="500" value="15000"><output id="sandNV"></output></div>
+      </section>
+    </div>
+    <section>
+      <h2>one-shots <small>sent as bus events, like the game</small></h2>
+      <div class="shots" id="shots"></div>
+    </section>
+  </div>
+  <canvas id="scope" width="2560" height="440"></canvas>
+</main>
+<script type="module">
+// Interactive harness for src/audio: the real createAudio() glue and the real plate field, with a
+// pretend game around them (sliders for the plate, the bow, the population, the room).
+import { createAudio } from '../src/audio/audio.js';
+import { createField } from '../src/sim/field.js';
+import { MODES, BOWABLE, modeById, bowPick } from '../src/sim/modes.js';
+
+const $ = (id) => document.getElementById(id);
+const handlers = new Map();
+const bus = {
+  on(t, fn) { if (!handlers.has(t)) handlers.set(t, new Set()); handlers.get(t).add(fn); return () => handlers.get(t)?.delete(fn); },
+  emit(t, p = {}) { for (const fn of handlers.get(t) || []) fn(p); },
+};
+const state = { plate: { fatigue: 0, cracks: [] }, species: {} };
+const field = createField({ state, bus: null });
+const bow = { held: false, bowing: false, edge: 'right', t: 0.31, speed01: 0, mode: null, x: innerWidth * 0.75 };
+const pops = [];
+const game = {
+  bus, state, field, view: { vw: innerWidth, anchors: { cord: { x: innerWidth * 0.58 }, journal: { x: innerWidth * 0.2 } } },
+  tools: { bow }, life: { populations: () => pops, species: {} },
+  light: { on: true, level: 1 }, fx: { choir: 0, floor: 0 }, hold: null, sand: { n: 15000 },
+};
+const audio = createAudio(game);
+window.__audio = audio; window.__game = game;
+
+// --- plate modes ------------------------------------------------------------------------------
+const modeOpts = ['—', ...BOWABLE.map((m) => m.id)].map((id) => `<option value="${id === '—' ? '' : id}">${id === '—' ? '—' : `${id} · k${modeById(id).k}`}</option>`).join('');
+const manual = [['2.4+', 0], ['', 0], ['', 0]];
+$('modes').innerHTML = manual.map((m, i) => `<div class="row"><select id="m${i}">${modeOpts}</select><input id="a${i}" type="range" min="0" max="1.4" step="0.01" value="${m[1]}"><output id="a${i}V">0.00</output></div>`).join('');
+manual.forEach((m, i) => { $('m' + i).value = m[0]; });
+function syncManual() {
+  const comps = [];
+  for (let i = 0; i < 3; i++) {
+    const id = $('m' + i).value, a = +$('a' + i).value;
+    $('a' + i + 'V').textContent = a.toFixed(2);
+    if (id && a > 0) comps.push({ mode: id, amp: a });
+  }
+  field.setSource('manual', comps);
+}
+for (let i = 0; i < 3; i++) { $('m' + i).oninput = syncManual; $('a' + i).oninput = syncManual; }
+$('cracks').oninput = () => {
+  const n = +$('cracks').value;
+  $('cracksV').textContent = n;
+  state.plate.cracks = Array.from({ length: n }, (_, i) => ({ pts: [[1, -0.6 + i * 0.25], [0.7, -0.5 + i * 0.25], [0.45, -0.55 + i * 0.25]], gold: [0, 0], healed: false }));
+  field.invalidate?.();
+};
+
+// --- bow ----------------------------------------------------------------------------------------
+let latch = false;
+const bowBtn = $('bow');
+const setBowing = (on) => {
+  if (on && !bow.bowing) bus.emit('bow:start', { edge: bow.edge, t: bow.t });
+  if (!on && bow.bowing) bus.emit('bow:end', {});
+  bow.held = on; bow.bowing = on; bowBtn.classList.toggle('on', on);
+};
+bowBtn.onpointerdown = () => { start(); setBowing(true); };
+addEventListener('pointerup', () => { if (!latch) setBowing(false); });
+$('bowLatch').onclick = () => { latch = !latch; $('bowLatch').classList.toggle('on', latch); setBowing(latch); };
+$('edge').oninput = () => { bow.edge = $('edge').value; };
+
+// --- singers ------------------------------------------------------------------------------------
+const PRESETS = {
+  octave: [['1.2+', 3, 0.8, -0.4], ['1.3+', 4, 0.7, 0.1], ['2.4+', 3, 0.9, 0.5]],
+  thirteen: [['2.3+', 4, 0.8, -0.2], ['1.5+', 2, 0.6, 0.4], ['4.6+', 2, 0.7, -0.6]],
+  floor: [['1.2+', 2, 0.8, -0.6], ['1.3+', 2, 0.8, -0.2], ['2.4+', 2, 0.8, 0.2], ['2.6+', 2, 0.8, 0.6]],
+  discord: [['2.3+', 4, 0.4, -0.4], ['1.2+|2.4+', 2, 0.8, 0.3], ['4.4+', 3, 0.5, 0.6]],
+  aurata: [['3.4+*', 3, 0.9, 0], ['1.2+|2.4+|3.4+', 2, 0.9, -0.5]],
+  none: [],
+};
+let rows = PRESETS.octave.map((r) => [...r]);
+function renderSpecies() {
+  $('species').innerHTML = rows.map((r, i) => `<div class="species">
+    <input type="text" data-i="${i}" data-k="0" value="${r[0]}">
+    <input type="range" data-i="${i}" data-k="1" min="1" max="16" step="1" value="${r[1]}">
+    <input type="range" data-i="${i}" data-k="2" min="0" max="1" step="0.01" value="${r[2]}">
+    <input type="range" data-i="${i}" data-k="3" min="-1" max="1" step="0.01" value="${r[3]}">
+    <button class="x" data-del="${i}">×</button></div>`).join('') + `<div class="toggles"><button id="addSp">+ species</button></div>`;
+  $('species').querySelectorAll('input').forEach((el) => { el.oninput = () => { rows[+el.dataset.i][+el.dataset.k] = el.type === 'text' ? el.value.trim() : +el.value; syncPops(); }; });
+  $('species').querySelectorAll('[data-del]').forEach((el) => { el.onclick = () => { rows.splice(+el.dataset.del, 1); renderSpecies(); syncPops(); }; });
+  $('addSp').onclick = () => { rows.push(['3.5-', 2, 0.7, 0]); renderSpecies(); syncPops(); };
+}
+function syncPops() {
+  pops.length = 0;
+  for (const [id, count, meanE, cu] of rows) {
+    const comps = id.replace(/\*$/, '').split('|').filter((c) => modeById(c));
+    if (!comps.length) continue;
+    pops.push({ id, count, meanE, cu, cv: 0, comps, ks: comps.map((c) => modeById(c).k), species: { aurata: id.endsWith('*') } });
+  }
+}
+document.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => { rows = PRESETS[b.dataset.preset].map((r) => [...r]); renderSpecies(); syncPops(); }; });
+renderSpecies(); syncPops();
+let chorusOn = true;
+$('chorus').onclick = () => { chorusOn = !chorusOn; $('chorus').classList.toggle('on', chorusOn); };
+
+// --- room ---------------------------------------------------------------------------------------
+$('dark').onclick = () => { start(); game.light.on = !game.light.on; $('dark').classList.toggle('on', !game.light.on); bus.emit('sfx', { name: 'cord' }); bus.emit('light', { on: game.light.on }); };
+$('hold').onclick = () => { game.hold = game.hold ? null : { u: 0.2, v: 0.1, t: 0 }; $('hold').classList.toggle('on', !!game.hold); };
+let pouring = false;
+$('pour').onpointerdown = () => { start(); pouring = true; $('pour').classList.add('on'); };
+addEventListener('pointerup', () => { pouring = false; $('pour').classList.remove('on'); });
+for (const id of ['choir', 'floor', 'sandN']) $(id).oninput = () => { $(id + 'V').textContent = $(id).value; };
+
+// --- one-shots ----------------------------------------------------------------------------------
+const m1 = () => ({ u: Math.random() * 1.6 - 0.8, v: 0.1, sp: pops[0]?.id || '2.4+', spec: pops[0] ? { comps: pops[0].comps } : null });
+const SHOTS = [
+  ['the plate', [
+    ['tap', () => bus.emit('plate:tap', { u: Math.random() * 1.8 - 0.9, v: Math.random() * 1.8 - 0.9, strength: 0.4 + Math.random() * 0.6 })],
+    ['crack', () => { bus.emit('plate:crack', { crack: 0 }); $('cracks').value = Math.min(5, +$('cracks').value + 1); $('cracks').oninput(); }],
+    ['heal', () => { bus.emit('plate:heal', { crack: 0 }); $('cracks').value = Math.max(0, +$('cracks').value - 1); $('cracks').oninput(); }],
+    ['fork 20', () => bus.emit('fork:strike', { k: 20 })],
+    ['fork touch', () => bus.emit('fork:touch', { k: 20, mode: '2.4+' })],
+    ['damper', () => bus.emit('damper:place', { u: 0.3, v: 0.2 })],
+    ['damper off', () => bus.emit('damper:remove', { u: 0.3, v: 0.2 })],
+  ]],
+  ['the singers', [
+    ['birth', () => bus.emit('mote:birth', { mote: m1(), species: pops[0] || '2.4+', isNew: false })],
+    ['new form', () => bus.emit('mote:birth', { mote: m1(), species: pops[1] || pops[0] || '1.2+|2.4+', isNew: true })],
+    ['split', () => bus.emit('mote:split', { parent: m1(), child: m1() })],
+    ['fuse', () => bus.emit('mote:fuse', { a: { u: -0.2, sp: '1.2+' }, b: { u: 0.2, sp: '3.4+' }, child: { u: 0 }, species: '1.2+|3.4+', isNew: true })],
+    ['devour', () => bus.emit('mote:eat', { pred: { u: 0.1, sp: '2.4+' }, prey: { u: 0.15, sp: '2.3+' } })],
+    ['old age', () => bus.emit('mote:death', { mote: m1(), cause: 'age' })],
+    ['hunger', () => bus.emit('mote:death', { mote: m1(), cause: 'hunger' })],
+    ['fall', () => bus.emit('mote:fall', { mote: { u: 0.95, sp: pops[0]?.id || '3.5+' } })],
+    ['extinct', () => bus.emit('species:extinct', { species: '2.3+' })],
+  ]],
+  ['rare states', [
+    ['choir', () => { bus.emit('life:choir', { on: true, species: pops.map((p) => p.id) }); $('choir').value = 1; $('choirV').textContent = 1; }],
+    ['floor', () => { bus.emit('life:floor', { on: true }); $('floor').value = 1; $('floorV').textContent = 1; }],
+    ['moth', () => bus.emit('moth', { state: 'arrive', u: -0.5 })],
+    ['moth lands', () => bus.emit('moth', { state: 'land', u: 0.1 })],
+    ['moth leaves', () => bus.emit('moth', { state: 'leave', u: 0.4 })],
+  ]],
+  ['the room', [
+    ['cord', () => bus.emit('sfx', { name: 'cord' })],
+    ['lamp off', () => bus.emit('light', { on: false })],
+    ['lamp on', () => bus.emit('light', { on: true })],
+    ['drawer', () => bus.emit('sfx', { name: 'drawer' })],
+    ['drawer shut', () => bus.emit('sfx', { name: 'drawerClose' })],
+    ['notebook', () => bus.emit('journal:open', {})],
+    ['page', () => bus.emit('sfx', { name: 'page' })],
+    ['close book', () => bus.emit('journal:close', {})],
+    ['grab', () => bus.emit('sfx', { name: 'grab' })],
+    ['set down', () => bus.emit('sfx', { name: 'drop' })],
+    ['jar', () => bus.emit('sfx', { name: 'glass' })],
+    ['reveal', () => bus.emit('reveal', { what: 'jar' })],
+    ['creak', () => bus.emit('sfx', { name: 'creak' })],
+  ]],
+];
+$('shots').innerHTML = SHOTS.map(([h, list], gi) => `<h3>${h}</h3>` + list.map(([name], i) => `<button data-g="${gi}" data-i="${i}">${name}</button>`).join('')).join('');
+$('shots').querySelectorAll('button').forEach((b) => { b.onclick = () => { start(); SHOTS[+b.dataset.g][1][+b.dataset.i][1](); }; });
+
+// --- start / mute -------------------------------------------------------------------------------
+let analyser = null;
+function start() {
+  if (audio.ready) return;
+  bus.emit('start', {});
+  const E = audio.engine;
+  if (!E) return;
+  analyser = E.ctx.createAnalyser();
+  analyser.fftSize = 16384; analyser.smoothingTimeConstant = 0.6;
+  E.output.connect(analyser);
+  $('start').textContent = 'sound on';
+  $('start').classList.add('on');
+}
+$('start').onclick = start;
+$('mute').onclick = () => { audio.toggleMute(); $('mute').classList.toggle('on', audio.muted); $('mute').textContent = audio.muted ? 'muted' : 'mute'; };
+if (audio.muted) { $('mute').classList.add('on'); $('mute').textContent = 'muted'; }
+
+// --- loop ---------------------------------------------------------------------------------------
+let last = performance.now(), cur = null;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  bow.t = +$('bowT').value; bow.speed01 = bow.bowing ? +$('speed').value : 0;
+  $('bowTV').textContent = bow.t.toFixed(2); $('speedV').textContent = (+$('speed').value).toFixed(2);
+  if (bow.bowing) {
+    cur = bowPick(bow.edge, bow.t, bow.speed01, cur);
+    bow.mode = cur;
+    field.setSource('bow', [{ mode: cur, amp: 0.25 + 0.9 * bow.speed01 }]);
+  } else field.setSource('bow', []);
+  const m = modeById(cur);
+  $('bowInfo').textContent = m ? `${bow.bowing ? 'bowing' : 'resting'} · mode ${m.id} · k ${m.k} · ${m.freq.toFixed(1)} Hz` : 'the bow rests on the felt';
+  // the population sings into the plate (bible: a_s = 0.42 (1 - e^(-n/3)) (0.4 + 0.6 E))
+  const chorus = [];
+  if (chorusOn) for (const p of pops) {
+    const a = 0.42 * (1 - Math.exp(-p.count / 3)) * (0.4 + 0.6 * p.meanE);
+    for (const c of p.comps) chorus.push({ mode: c, amp: a / Math.sqrt(p.comps.length) });
+  }
+  field.setSource('chorus', chorus);
+  game.fx.choir += (+$('choir').value - game.fx.choir) * Math.min(1, dt * 0.6);
+  game.fx.floor += (+$('floor').value - game.fx.floor) * Math.min(1, dt * 0.5);
+  field.setSource('floor', game.fx.floor > 0.01 ? [{ mode: 'floor', amp: 1.2 * game.fx.floor }] : []);
+  game.sand.n = +$('sandN').value; $('sandNV').textContent = game.sand.n;
+  if (pouring) bus.emit('sand:pour', { u: 0.1, v: 0, n: 6 });
+  field.update(dt);
+  audio.update(dt);
+  const s = audio.stats();
+  $('stats').textContent = s.state === 'idle' ? 'idle · press any button to start' :
+    `${s.state} · ${s.sampleRate} Hz · ${s.nodes} nodes · ${s.oneShots} one-shots · plate ${s.plate} · singers ${s.singers}${s.bow ? ' · bow' : ''}${s.drone ? ' · drone' : ''}${s.floor ? ' · floor' : ''}${s.sand ? ' · sand' : ''}`;
+  draw();
+}
+requestAnimationFrame(frame);
+
+// --- scope: waveform above, log spectrum below with the sounding modes marked -----------------
+const cv = $('scope'), g = cv.getContext('2d');
+let td = null, fd = null;
+function draw() {
+  const w = cv.width, h = cv.height;
+  g.fillStyle = '#070605'; g.fillRect(0, 0, w, h);
+  const top = h * 0.36;
+  g.strokeStyle = 'rgba(226,184,102,.1)'; g.beginPath(); g.moveTo(0, top / 2); g.lineTo(w, top / 2); g.stroke();
+  g.font = '20px ui-monospace, Menlo, monospace';
+  const fLo = 40, fHi = 12000, lg = Math.log(fHi / fLo), X = (f) => Math.log(f / fLo) / lg * w;
+  g.fillStyle = '#4c4236';
+  for (const f of [55, 110, 220, 440, 880, 1760, 3520, 7040]) { g.fillRect(X(f), top + 8, 1, h - top - 8); g.fillText(f + '', X(f) + 4, h - 8); }
+  // sounding modes
+  for (const e of field.spectrum()) {
+    const x = X(e.freq);
+    g.fillStyle = `rgba(226,184,102,${Math.min(0.9, 0.2 + e.amp)})`;
+    g.fillRect(x - 1, top + 8, 2, 14);
+    g.fillText(e.mode === 'floor' ? 'floor' : 'k' + e.k, x + 4, top + 24);
+  }
+  if (!analyser) { g.fillStyle = '#75685a'; g.fillText('press "start sound" (or any button): the scope listens to the master output', 24, top / 2 - 12); return; }
+  if (!td) { td = new Float32Array(analyser.fftSize); fd = new Float32Array(analyser.frequencyBinCount); }
+  analyser.getFloatTimeDomainData(td);
+  analyser.getFloatFrequencyData(fd);
+  // waveform (triggered on a rising zero crossing so tones stand still)
+  let s0 = 0;
+  for (let i = 1; i < td.length / 2; i++) if (td[i - 1] < 0 && td[i] >= 0) { s0 = i; break; }
+  g.strokeStyle = '#d9b26a'; g.lineWidth = 2; g.beginPath();
+  const span = Math.min(td.length - s0, 1600);
+  for (let i = 0; i < span; i++) { const x = i / span * w, y = top / 2 - td[s0 + i] * top * 0.9; if (i) g.lineTo(x, y); else g.moveTo(x, y); }
+  g.stroke();
+  // spectrum
+  const sr = audio.context.sampleRate, bins = fd.length;
+  g.beginPath(); g.moveTo(0, h);
+  for (let x = 0; x < w; x += 2) {
+    const f = fLo * Math.exp(x / w * lg), kf = Math.min(bins - 2, f / (sr / 2) * bins), k = Math.floor(kf), fr = kf - k;
+    const v = Math.max(0, Math.min(1, (fd[k] * (1 - fr) + fd[k + 1] * fr + 100) / 80));
+    g.lineTo(x, h - 30 - v * (h - top - 70));
+  }
+  g.lineTo(w, h); g.closePath();
+  const grad = g.createLinearGradient(0, top, 0, h); grad.addColorStop(0, 'rgba(240,200,120,.85)'); grad.addColorStop(1, 'rgba(120,80,40,.15)');
+  g.fillStyle = grad; g.fill();
+}
+</script>

@@ -72,7 +72,7 @@ function boot() {
 
   game.field = createField({ state: s, bus, rng: game.rng });
   game.sand = createSand(game.field, { state: s, bus });
-  if (s.sand) game.sand.deserialize(s.sand); else game.sand.seedScatter(15000);
+  if (s.sand) game.sand.deserialize(s.sand); else game.sand.seedScatter(20000);
   if (s.plate.wear) { try { game.wear.set(unb64(s.plate.wear).subarray(0, WEAR * WEAR)); } catch {} }
 
   game.life = createLife(game);
@@ -115,7 +115,16 @@ function boot() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') save(); });
   window.addEventListener('pagehide', save);
 
-  if (game.debug) window.__sp = game;
+  if (game.debug) {
+    window.__sp = game;
+    // test hook: run the simulation forward synchronously (no rendering)
+    game.advance = (sec, h = 1 / 30) => {
+      const n = Math.round(sec / h);
+      for (let i = 0; i < n; i++) { game.t += h; stepLight(h); update(h); }
+      render();
+      return n;
+    };
+  }
   requestAnimationFrame(frame);
 }
 

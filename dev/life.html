@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>life harness</title>
+<style>
+  :root { color-scheme: dark; --bg: #0b0908; --ink: #d8ccb4; --dim: #8a7d68; --line: #2a231c; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; }
+  main { display: grid; grid-template-columns: minmax(320px, 680px) minmax(260px, 1fr); gap: 16px; padding: 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  canvas { width: 100%; aspect-ratio: 1; display: block; border-radius: 4px; cursor: crosshair; touch-action: none; }
+  .bar { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; align-items: center; }
+  button { background: #1a1511; color: var(--ink); border: 1px solid var(--line); border-radius: 3px; padding: 3px 7px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #5a4a36; }
+  button.on { background: #4a3720; border-color: #b08850; color: #fff2d8; }
+  h2 { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); margin: 14px 0 6px; font-weight: normal; }
+  #pops div, #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+  #log { color: var(--dim); max-height: 220px; overflow: auto; }
+  #log b { color: var(--ink); font-weight: normal; }
+  #note { color: var(--dim); font-style: italic; margin-top: 6px; min-height: 3em; }
+  label { color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+  <section>
+    <canvas id="c" width="1200" height="1200"></canvas>
+    <div class="bar" id="ctl">
+      <button id="silence">silence</button>
+      <label>amp <input id="amp" type="range" min="0.2" max="1.5" step="0.05" value="0.8"></label>
+      <button id="light">light</button>
+      <button data-speed="1" class="on">×1</button><button data-speed="4">×4</button><button data-speed="16">×16</button>
+      <button id="fresh">reseed</button>
+      <span id="clock"></span>
+    </div>
+    <div class="bar" id="modes"></div>
+    <div style="color:var(--dim)">click plate: tap · hold still on plate: resting finger · click a singer: its note</div>
+  </section>
+  <section>
+    <h2>populations</h2><div id="pops"></div>
+    <div id="note"></div>
+    <h2>plate</h2><div id="stats"></div>
+    <h2>observations</h2><div id="log"></div>
+  </section>
+</main>
+<script type="module">
+import { bus } from '../src/core/bus.js';
+import { makeRng } from '../src/core/rng.js';
+import { newState } from '../src/core/persist.js';
+import { createField } from '../src/sim/field.js';
+import { createSand } from '../src/sim/sand.js';
+import { createLife, TUNE } from '../src/sim/life.js';
+import { observationFor, noteFor } from '../src/sim/naming.js';
+import { MODES, BOWABLE, evalMode } from '../src/sim/modes.js';
+
+const q = new URLSearchParams(location.search);
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = cv.width;
+let game, field, sand, life, bowMode = null, speed = 1, picked = null;
+const logLines = [];
+
+function build(seed) {
+  const state = newState();
+  const rng = makeRng(seed);
+  field = createField({ state, bus, rng });
+  sand = createSand(field, { state, bus });
+  sand.seedScatter(15000);
+  game = { t: 0, dt: 1 / 30, rng, bus, state, field, sand, light: { on: true, level: 1 }, fx: {}, hold: null,
+    wear: new Uint8Array(128 * 128), WEAR: 128, wearVersion: 0 };
+  life?.destroy?.();
+  life = game.life = createLife(game);
+  window.__life = life; window.__game = game;
+  logLines.length = 0;
+}
+build(+(q.get('seed') || 7));
+
+for (const type of ['species:new', 'species:extinct', 'mote:fuse', 'mote:eat', 'mote:fall', 'life:choir', 'life:floor']) {
+  bus.on(type, (p) => {
+    const t = observationFor(type, p);
+    if (t) logLines.push(`<b>${clock(game.t)}</b> ${t}`);
+    if (type === 'life:floor' && p.on) { field.setSource('floor', [{ mode: 'floor', amp: 1.2 }]); floorLeft = 18; }
+    renderLog();
+  });
+}
+let floorLeft = 0;
+
+// --- controls
+const modesEl = document.getElementById('modes');
+for (const m of BOWABLE) {
+  const b = document.createElement('button');
+  b.textContent = `${m.k} ${m.id}`;
+  b.title = `k ${m.k}`;
+  b.onclick = () => { bowMode = bowMode === m.id ? null : m.id; syncButtons(); };
+  b.dataset.mode = m.id;
+  modesEl.appendChild(b);
+}
+document.getElementById('silence').onclick = () => { bowMode = null; syncButtons(); };
+document.getElementById('light').onclick = () => { game.light.on = !game.light.on; bus.emit('light', { on: game.light.on }); syncButtons(); };
+document.getElementById('fresh').onclick = () => { build((Math.random() * 1e9) | 0); bowMode = null; syncButtons(); };
+for (const b of document.querySelectorAll('[data-speed]')) b.onclick = () => { speed = +b.dataset.speed; syncButtons(); };
+function syncButtons() {
+  for (const b of modesEl.children) b.classList.toggle('on', b.dataset.mode === bowMode);
+  document.getElementById('light').classList.toggle('on', game.light.on);
+  for (const b of document.querySelectorAll('[data-speed]')) b.classList.toggle('on', +b.dataset.speed === speed);
+}
+syncButtons();
+
+// pointer: tap, resting finger, pick
+let down = null;
+const toPlate = (e) => { const r = cv.getBoundingClientRect(); return { u: ((e.clientX - r.left) / r.width) * 2 - 1, v: ((e.clientY - r.top) / r.height) * 2 - 1 }; };
+cv.addEventListener('pointerdown', (e) => { const p = toPlate(e); down = { ...p, t: performance.now(), moved: 0 }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', (e) => {
+  if (!down) return;
+  const p = toPlate(e);
+  down.moved += Math.hypot(p.u - (down.lu ?? down.u), p.v - (down.lv ?? down.v)); down.lu = p.u; down.lv = p.v;
+  if (game.hold) { game.hold.u = p.u; game.hold.v = p.v; }
+});
+cv.addEventListener('pointerup', (e) => {
+  const p = toPlate(e);
+  if (down && performance.now() - down.t < 220 && down.moved < 0.02) {
+    const m = life.moteAt(p.u, p.v, 0.07);
+    if (m) picked = m;
+    else { field.impulse([{ mode: '1.2+', amp: 0.5 }, { mode: '2.3-', amp: 0.3 }], 0.6); sand.scatter(p.u, p.v, 0.6); bus.emit('plate:tap', { u: p.u, v: p.v, strength: 1 }); }
+  }
+  down = null; game.hold = null;
+});
+setInterval(() => { if (down && !game.hold && performance.now() - down.t > 1200 && down.moved < 0.03) game.hold = { u: down.lu ?? down.u, v: down.lv ?? down.v, t: game.t }; }, 100);
+
+// --- sim
+function step(dt) {
+  field.setSource('bow', bowMode ? [{ mode: bowMode, amp: +document.getElementById('amp').value }] : []);
+  if (floorLeft > 0) { floorLeft -= dt; if (floorLeft <= 0) field.setSource('floor', []); }
+  field.setSource('chorus', life.chorus());
+  field.update(dt); sand.update(dt); life.update(dt);
+  game.t += dt;
+}
+
+// optional scripted warm-up for screenshots: ?script=k:secs,k:secs,...,silence:secs
+if (q.get('script')) {
+  for (const part of q.get('script').split(',')) {
+    const [what, secs] = part.split(':');
+    bowMode = what === 'silence' ? null : (MODES.find((m) => m.id === what) ? what : null);
+    if (what === 'dark') { game.light.on = false; bowMode = null; }
+    if (what === 'light') { game.light.on = true; bowMode = null; }
+    if (what.startsWith('hold')) { const [, u, v] = what.split('_'); game.hold = { u: +u, v: +v, t: game.t }; bowMode = null; }
+    for (let i = 0; i < +secs * 30; i++) step(1 / 30);
+  }
+  syncButtons();
+}
+
+// --- drawing
+const img = ctx.createImageData(W, W);
+const plateBase = new Uint8ClampedArray(W * W * 4);
+(function bakePlate() {
+  for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {
+    const u = x / W * 2 - 1, v = y / W * 2 - 1;
+    const r = Math.hypot(u + 0.25, v + 0.35);
+    const lit = Math.max(0, 1 - r * 0.55);
+    const brush = Math.sin(y * 0.7 + Math.sin(x * 0.013) * 4) * 0.03;
+    const p = (y * W + x) * 4;
+    plateBase[p] = (96 + 90 * lit) * (1 + brush); plateBase[p + 1] = (66 + 64 * lit) * (1 + brush); plateBase[p + 2] = (34 + 36 * lit) * (1 + brush); plateBase[p + 3] = 255;
+  }
+})();
+const G = 128;
+const figCache = new Map();
+function figure(comps, size) {           // tiny luminous chladni figure for a species
+  const key = comps.join('|') + size;
+  if (figCache.has(key)) return figCache.get(key);
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d'), id = g.createImageData(size, size);
+  const ms = comps.map((x) => MODES.find((m) => m.id === x));
+  for (let j = 0; j < size; j++) for (let i = 0; i < size; i++) {
+    const u = i / size * 2 - 1, v = j / size * 2 - 1;
+    if (u * u + v * v > 1) continue;
+    let a = 0;
+    ms.forEach((m) => { const f = Math.abs(evalMode(m, u, v)); a = Math.max(a, Math.max(0, 1 - f / 0.12)); });
+    const p = (j * size + i) * 4;
+    id.data[p] = 255; id.data[p + 1] = 250; id.data[p + 2] = 235; id.data[p + 3] = a * 230;
+  }
+  g.putImageData(id, 0, 0);
+  figCache.set(key, c);
+  return c;
+}
+
+function draw() {
+  const d = img.data;
+  const lightK = game.light.on ? 1 : 0.18;
+  for (let i = 0; i < d.length; i += 4) { d[i] = plateBase[i] * lightK; d[i + 1] = plateBase[i + 1] * lightK; d[i + 2] = plateBase[i + 2] * lightK; d[i + 3] = 255; }
+  // wear
+  for (let j = 0; j < G; j++) for (let i = 0; i < G; i++) {
+    const w = game.wear[j * G + i];
+    if (!w) continue;
+    const s = W / G, k = w / 255 * 70 * lightK;
+    for (let y = (j * s) | 0; y < ((j + 1) * s) | 0; y++) for (let x = (i * s) | 0; x < ((i + 1) * s) | 0; x++) { const p = (y * W + x) * 4; d[p] += k; d[p + 1] += k * 0.85; d[p + 2] += k * 0.5; }
+  }
+  if (game.light.on) for (let i = 0; i < sand.n; i++) {
+    const x = ((sand.x[i] + 1) * 0.5 * W) | 0, y = ((sand.y[i] + 1) * 0.5 * W) | 0;
+    const p = (y * W + x) * 4;
+    if (sand.kind[i]) { d[p] = 255; d[p + 1] = 205; d[p + 2] = 90; } else { d[p] = 236; d[p + 1] = 226; d[p + 2] = 204; }
+    if (x + 1 < W) { d[p + 4] = d[p] * 0.85; d[p + 5] = d[p + 1] * 0.85; d[p + 6] = d[p + 2] * 0.85; }
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // finger
+  if (game.hold) {
+    const x = (game.hold.u + 1) / 2 * W, y = (game.hold.v + 1) / 2 * W;
+    const gr = ctx.createRadialGradient(x, y, 0, x, y, 60);
+    gr.addColorStop(0, 'rgba(255,230,200,0.35)'); gr.addColorStop(1, 'rgba(255,230,200,0)');
+    ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(x, y, 60, 0, 7); ctx.fill();
+  }
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const { data, count } = life.instanceData();
+  for (let n = 0; n < count; n++) {
+    const o = n * 16;
+    const m = life.motes[n];
+    const sp = life.species[m.sp];
+    const x = (data[o] + 1) / 2 * W, y = (data[o + 1] + 1) / 2 * W, r = data[o + 2] / 2 * W;
+    const e = data[o + 3], age01 = data[o + 4], st = data[o + 5], code = Math.floor(st), prog = st - code, fl = data[o + 15];
+    let scale = 1, alpha = 0.35 + 0.65 * e;
+    if (code === 10) { scale = 0.3 + 0.7 * prog; alpha *= prog; }          // born
+    if (code === 8) { scale = 1 - prog; alpha *= 1 - prog; }               // fall
+    if (code === 9) { scale = 1 - 0.6 * prog; alpha *= 1 - prog; }         // die
+    if (fl & 4) alpha = 1;
+    const c = sp.colors[0];
+    const gold = Math.max(0, (age01 - 0.8) / 0.2);
+    const col = (a) => `rgba(${(c[0] * (1 - gold) + gold) * 255 | 0},${(c[1] * (1 - gold) + 0.8 * gold) * 255 | 0},${(c[2] * (1 - gold) + 0.4 * gold) * 255 | 0},${a})`;
+    const R = r * scale;
+    const halo = ctx.createRadialGradient(x, y, 0, x, y, R * 2.6);
+    halo.addColorStop(0, col(0.55 * alpha)); halo.addColorStop(0.4, col(0.18 * alpha)); halo.addColorStop(1, col(0));
+    ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(x, y, R * 2.6, 0, 7); ctx.fill();
+    ctx.fillStyle = col(0.5 * alpha); ctx.beginPath(); ctx.arc(x, y, R, 0, 7); ctx.fill();
+    const fig = figure(sp.comps, 48);
+    ctx.globalAlpha = alpha; ctx.drawImage(fig, x - R, y - R, 2 * R, 2 * R); ctx.globalAlpha = 1;
+    // heading
+    ctx.strokeStyle = col(0.7 * alpha); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x + m.hx * R, y + m.hy * R); ctx.lineTo(x + m.hx * R * 1.5, y + m.hy * R * 1.5); ctx.stroke();
+    if (m.hunt) { ctx.strokeStyle = 'rgba(255,80,60,0.35)'; ctx.setLineDash([4, 6]); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo((m.hunt.u + 1) / 2 * W, (m.hunt.v + 1) / 2 * W); ctx.stroke(); ctx.setLineDash([]); }
+    if (m === picked) { ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, R * 2, 0, 7); ctx.stroke(); }
+  }
+  ctx.restore();
+  if (life.choir) { ctx.fillStyle = 'rgba(255,200,90,0.07)'; ctx.fillRect(0, 0, W, W); }
+}
+
+function clock(t) { const r = Math.round(t); return `${Math.floor(r / 60)}:${String(r % 60).padStart(2, '0')}`; }
+function renderLog() { document.getElementById('log').innerHTML = logLines.slice(-40).reverse().map((l) => `<div>${l}</div>`).join(''); }
+
+let uiClock = 0;
+function ui() {
+  const pops = life.populations().slice().sort((a, b) => b.count - a.count);
+  document.getElementById('pops').innerHTML = pops.map((p) => {
+    const sp = life.species[p.id];
+    return `<div><span class="sw" style="background:${sp.css}"></span>${sp.name} <span style="color:var(--dim)">${p.count} · e ${p.meanE.toFixed(2)} · ${sp.ks.join(',')}</span></div>`;
+  }).join('') || '<div style="color:var(--dim)">none</div>';
+  const st = game.state;
+  const extinct = Object.values(st.species).filter((r) => r.extinct).length;
+  document.getElementById('stats').innerHTML =
+    `pop ${life.motes.length} · forms ${Object.keys(st.species).length} (${extinct} extinct)<br>` +
+    `field ${field.total.toFixed(2)} · chorus ${Math.sqrt(life.chorus().reduce((a, c) => a + c.amp * c.amp, 0)).toFixed(2)} · quickening ${life.quickening.toFixed(2)}<br>` +
+    `sand ${sand.n} · choir ${life.choir ? 'yes' : 'no'} · wear v${game.wearVersion}`;
+  if (picked && !picked.dead) {
+    const sp = life.species[picked.sp];
+    document.getElementById('note').textContent = `${sp.name} — ${st.species[sp.id]?.ratio || ''}. ${st.species[sp.id]?.note || noteFor(sp, st.species[sp.id], st.stats)} [${picked.state} e ${picked.e.toFixed(2)} age ${picked.age.toFixed(0)}/${picked.life.toFixed(0)}]`;
+  }
+  document.getElementById('clock').textContent = clock(game.t);
+}
+
+let last = performance.now(), acc = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  acc += dt * speed;
+  let n = 0;
+  while (acc >= 1 / 30 && n < 40) { step(1 / 30); acc -= 1 / 30; n++; }
+  if (n >= 40) acc = 0;
+  draw();
+  uiClock += dt; if (uiClock > 0.25) { uiClock = 0; ui(); }
+}
+draw(); ui(); renderLog();
+window.harnessReady = true;
+if (!q.has('still')) requestAnimationFrame(frame);
+void TUNE;
+</script>
+</body>
+</html>

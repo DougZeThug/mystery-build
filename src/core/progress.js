@@ -35,7 +35,7 @@ export function createProgress(game) {
   bus.on('mote:eat', () => { st.devoured++; });
   bus.on('mote:death', (e) => { st.deaths++; if (e.cause === 'fall') st.fell++; });
   bus.on('plate:crack', () => { st.cracks++; });
-  bus.on('plate:heal', () => { st.heals++; });
+  bus.on('plate:heal', (e) => { if (state.plate.cracks[e.crack]?.branchOf == null) st.heals++; });
   bus.on('life:choir', (e) => {
     choirOn = !!e.on;
     if (e.on) { st.choirs++; state.seen.choir = true; }
@@ -49,20 +49,13 @@ export function createProgress(game) {
 
   const speciesCount = () => Object.keys(state.species || {}).length;
 
-  // In the dark, with the bow still, the plate dreams: sand drifts into the figures of the extinct.
-  let darkFor = 0, dreamIdx = 0, dreamT = 0;
+  // In the dark the singers' plate dreams of the extinct (life drives the sand); note it once.
+  let darkFor = 0;
   function dream(dt) {
-    const quiet = !game.tools?.bow?.bowing;
-    if (!game.light.on && quiet) darkFor += dt; else darkFor = 0;
-    if (darkFor < 8) { if (game.field.getSource('dream')) game.field.setSource('dream', []); return; }
-    const gone = Object.values(state.species || {}).filter((r) => r.extinct && r.comps?.length);
-    if (!gone.length) return;
-    dreamT -= dt;
-    if (dreamT <= 0) {
-      dreamT = 26;
-      const rec = gone[dreamIdx++ % gone.length];
-      game.field.setSource('dream', rec.comps.map((m) => ({ mode: m, amp: 0.2 / Math.sqrt(rec.comps.length) })));
-      if (!state.seen.dreamed) { state.seen.dreamed = true; bus.emit('log', { kind: 'dream', text: 'In the dark the sand moved by itself, into a figure I had not seen in some time.' }); }
+    if (!game.light.on && !game.tools?.bow?.bowing) darkFor += dt; else darkFor = 0;
+    if (darkFor > 30 && !state.seen.dreamed && Object.values(state.species || {}).some((r) => r.extinct)) {
+      state.seen.dreamed = true;
+      bus.emit('log', { kind: 'dream', text: 'In the dark the sand moved by itself, into a figure I had not seen in some time.' });
     }
   }
 

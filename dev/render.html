@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>render harness</title>
+<link rel="stylesheet" href="../styles/main.css">
+<style>
+  #panel { position: fixed; top: 8px; left: 8px; z-index: 5; max-width: 330px; padding: 8px 10px; border-radius: 4px;
+    background: rgba(12, 10, 8, 0.82); border: 1px solid #2a231c; color: #cdbfa5;
+    font: 11px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+  #panel.hide { display: none; }
+  #panel .row { display: flex; flex-wrap: wrap; gap: 3px; margin: 4px 0; align-items: center; }
+  #panel button { background: #1a1511; color: inherit; border: 1px solid #3a2f24; border-radius: 3px; padding: 1px 6px; font: inherit; cursor: pointer; }
+  #panel button.on { background: #4a3720; border-color: #b08850; color: #fff2d8; }
+  #panel #stat { color: #8a7d68; white-space: pre; }
+  #figs { position: fixed; right: 8px; bottom: 8px; z-index: 5; display: flex; gap: 6px; padding: 6px; background: #efe4cc; border-radius: 3px; }
+  #figs.hide { display: none; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="panel">
+  <div class="row" id="modes"></div>
+  <div class="row">
+    <button data-t="dark">dark</button><button data-t="choir">choir</button><button data-t="floor">floor</button>
+    <button data-t="engr">engravings</button><button data-t="floorEngr">last message</button>
+  </div>
+  <div class="row">
+    <button data-a="crack">+crack</button><button data-a="gild">gild</button><button data-a="heal">heal all</button>
+    <button data-a="wear">+wear</button><button data-a="gold">+gold</button><button data-a="pour">+sand</button>
+    <button data-a="shake">shake</button><button data-a="flash">flash</button><button data-a="flicker">flicker</button>
+  </div>
+  <div class="row">
+    <button data-a="fewer">− singers</button><button data-a="more">+ singers</button><button data-t="states">states</button>
+    <button data-a="silence">silence</button><button data-t="figs">sketches</button>
+  </div>
+  <div id="stat"></div>
+</div>
+<div id="figs" class="hide"></div>
+<script type="module">
+// Renderer harness. Drives the real field and sand; singers are faked here (or ?life uses the real one).
+//   ?mode=3.5-,2.4+  &amp=0.8   modes sounding (equal split)     &secs=12   pre-simulate sand
+//   &singers=9   &states   (a gallery of born / die / fall / fuse / nestle / sleep / aurata / old)
+//   &dark=0..1 (light level, implies cord pulled)   &choir   &floor   &engr   &floorEngr
+//   &cracks=2 &gild=0.6 &heal   &wear   &gold=300   &clean (no panel)   &t=30 (start clock)
+//   &life   use src/sim/life.js instead of fake singers     &hold=1 (pause the sim after setup)
+import { createField, makeCrackFamily } from '../src/sim/field.js';
+import { createSand } from '../src/sim/sand.js';
+import { computeView } from '../src/core/view.js';
+import { MODES, BOWABLE, modeById, evalMode } from '../src/sim/modes.js';
+import { createRenderer } from '../src/render/gl.js';
+
+const q = new URLSearchParams(location.search);
+const glCanvas = document.getElementById('gl');
+const panel = document.getElementById('panel');
+if (q.has('clean')) panel.classList.add('hide');
+
+let seed = +(q.get('seed') || 11) >>> 0 || 11;
+const rnd = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+const rng = { next: rnd };
+
+const WEAR = 128;
+const state = { plate: { fatigue: 0, cracks: [] }, seen: {}, species: {} };
+const bus = { emit() {}, on() { return () => {}; } };
+const game = {
+  t: +(q.get('t') || 0), dt: 1 / 60, rng, bus, debug: true, view: null,
+  light: { on: true, level: 1, flicker: 0 },
+  fx: { choir: 0, floor: 0, shake: 0, flash: 0 },
+  state, hold: null,
+  wear: new Uint8Array(WEAR * WEAR), WEAR, wearVersion: 0,
+};
+const field = createField({ state, bus, rng: rnd });
+const sand = createSand(field, { state, bus });
+sand.seedScatter(+(q.get('n') || 15000));
+game.field = field; game.sand = sand;
+
+let modes = (q.get('mode') || '3.5-').split(',').filter((m) => modeById(m));
+let amp = +(q.get('amp') || 0.8);
+function drive() { field.setSource('test', modes.map((m) => ({ mode: m, amp: amp / Math.sqrt(modes.length) }))); }
+drive();
+
+const toggles = { dark: q.has('dark'), choir: q.has('choir'), floor: q.has('floor'), engr: q.has('engr'),
+  floorEngr: q.has('floorEngr'), states: q.has('states'), figs: q.has('figs') };
+const darkLevel = q.has('dark') ? +(q.get('dark') || 0) : 0;
+
+// ---- placeholder texts (harness only; the real ones come from the notebook module) ----------
+const PH_ENGR = [
+  'what is still is not silent',
+  'they keep to the quiet lines',
+  'feed them what they agree with',
+  'gold remembers where it broke',
+  'rest a finger, and wait',
+  'five, ten, twenty, forty',
+  'a held note stands up',
+  'they are gentler in the dark',
+];
+const PH_FLOOR = [
+  'I have heard the note beneath the lowest note.',
+  'The plate was never still; only patient.',
+  'Whoever reads this has fed them well.',
+  'Keep them singing. I am going down to listen.',
+  '— M. A. V.',
+];
+
+// ---- fake singers ---------------------------------------------------------------------------
+const SPECIES = [
+  { comps: ['3.5-'] }, { comps: ['2.4+'] }, { comps: ['1.2+', '2.4+'] }, { comps: ['1.3+', '3.4+', '2.6-'] },
+  { comps: ['3.5-'], aurata: true }, { comps: ['1.6+'] }, { comps: ['4.5+'] }, { comps: ['2.5-', '1.5+'] },
+];
+const fake = [];
+function stillPoint() {
+  for (let k = 0; k < 400; k++) {
+    const u = rnd() * 1.6 - 0.8, v = rnd() * 1.6 - 0.8;
+    if (Math.hypot(u, v) < 0.18) continue;
+    const s = field.sample(u, v);
+    if (s.F < 0.004 || k > 300) return [u, v];
+  }
+  return [0.5, 0.5];
+}
+function addSinger(i) {
+  const sp = SPECIES[i % SPECIES.length];
+  const [u, v] = stillPoint();
+  fake.push({ sp, u, v, au: u, av: v, r: 0.036 + rnd() * 0.022, e: 0.35 + rnd() * 0.65, age: rnd() * 0.75,
+    ph: rnd() * 6.28, state: 0, flags: sp.aurata ? 1 : 0 });
+}
+const nSing = q.has('singers') ? +q.get('singers') : 9;
+for (let i = 0; i < nSing; i++) addSinger(i);
+const inst = new Float32Array(64 * 16);
+const STATE_DEMO = [
+  { code: 10, period: 2.4 }, { code: 9, period: 2.0 }, { code: 9, period: 2.0, old: true }, { code: 8, period: 1.6 },
+  { code: 3, period: 1.7, flags: 4 }, { code: 7, flags: 8 }, { code: 6, flags: 2 }, { code: 4, period: 0.8 },
+  { code: 5, period: 0.6 }, { code: 2, period: 0.9 }, { code: 0, old: true }, { code: 0, aurata: true }, { code: 0, hungry: true },
+];
+const fakeLife = {
+  instanceData() {
+    let c = 0;
+    for (let i = 0; i < fake.length && c < 64; i++) {
+      const m = fake[i], o = c * 16;
+      let code = 0, prog = 0.3, flags = m.flags, age = m.age, e = m.e;
+      if (toggles.states) {
+        const d = STATE_DEMO[i % STATE_DEMO.length];
+        code = d.code;
+        prog = d.period ? (game.t / d.period + i * 0.13) % 1 : 0.4;
+        flags = (d.flags || 0) | (d.aurata ? 1 : 0) | (m.sp.aurata ? 1 : 0);
+        if (d.old) { age = d.code === 9 ? 0.99 : 0.93; flags |= 64; }
+        if (d.hungry) e = 0.08;
+      }
+      if (toggles.choir || toggles.floor) flags |= 16;
+      if (toggles.dark && code === 0) { flags |= 2; }
+      inst[o] = m.u; inst[o + 1] = m.v; inst[o + 2] = m.r; inst[o + 3] = e; inst[o + 4] = age;
+      inst[o + 5] = code + Math.min(0.99, prog);
+      for (let k = 0; k < 3; k++) {
+        const md = modeById(m.sp.comps[k]);
+        inst[o + 6 + k * 3] = md ? md.n : 0; inst[o + 7 + k * 3] = md ? md.m : 0; inst[o + 8 + k * 3] = md ? md.s : 0;
+      }
+      inst[o + 15] = flags;
+      c++;
+    }
+    return { data: inst, count: c, stride: 16 };
+  },
+};
+function stepFake(dt) {
+  for (const m of fake) {
+    // amble about an anchor that slides along the still lines
+    const s = field.sample(m.au, m.av);
+    const gl2 = Math.hypot(s.gx, s.gy) + 1e-6;
+    m.au += (-s.gy / gl2) * dt * 0.03 - s.gx * dt * 0.4;
+    m.av += (s.gx / gl2) * dt * 0.03 - s.gy * dt * 0.4;
+    m.au = Math.max(-0.88, Math.min(0.88, m.au)); m.av = Math.max(-0.88, Math.min(0.88, m.av));
+    if (toggles.choir) {
+      const i = fake.indexOf(m), a = (i / fake.length) * 6.2832 + game.t * 0.05;
+      m.au += (Math.cos(a) * 0.55 - m.au) * dt * 0.8; m.av += (Math.sin(a) * 0.55 - m.av) * dt * 0.8;
+    }
+    m.u = m.au + Math.sin(game.t * 0.7 + m.ph) * 0.012;
+    m.v = m.av + Math.cos(game.t * 0.6 + m.ph * 1.3) * 0.012;
+  }
+}
+
+let realLife = null;
+if (q.has('life')) {
+  try {
+    const { createLife } = await import('../src/sim/life.js');
+    game.state = Object.assign(state, { stats: { births: 0, deaths: 0 }, log: [] });
+    realLife = createLife(game);
+    for (let i = 0; i < nSing; i++) { const sp = SPECIES[i % SPECIES.length]; const [u, v] = stillPoint(); realLife.spawn?.(sp.comps, u, v, 0.7, { aurata: sp.aurata, silent: true }); }
+  } catch (e) { console.error('life failed', e); }
+}
+game.life = realLife || fakeLife;
+
+// ---- scenario setup -------------------------------------------------------------------------
+function addCrack() {
+  const fam = makeCrackFamily(rnd);
+  const idx = state.plate.cracks.length;
+  state.plate.cracks.push(fam[0]);
+  for (let b = 1; b < fam.length; b++) { fam[b].branchOf = idx; state.plate.cracks.push(fam[b]); }
+}
+function gild(x) { for (const c of state.plate.cracks) c.gold = c.gold.map((g, i) => Math.min(1, g + x * (0.5 + 0.5 * Math.sin(i * 1.7)))); }
+function healAll() { for (const c of state.plate.cracks) { c.gold = c.gold.map(() => 1); c.healed = true; } }
+function addWear() {
+  for (let p = 0; p < 6; p++) {
+    let u = rnd() * 1.6 - 0.8, v = rnd() * 1.6 - 0.8, a = rnd() * 6.28;
+    for (let s = 0; s < 260; s++) {
+      a += (rnd() - 0.5) * 0.5;
+      u += Math.cos(a) * 0.008; v += Math.sin(a) * 0.008;
+      if (Math.abs(u) > 0.9 || Math.abs(v) > 0.9) a += Math.PI;
+      const i = ((u + 1) * 0.5 * WEAR) | 0, j = ((v + 1) * 0.5 * WEAR) | 0;
+      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+        const ii = i + di, jj = j + dj;
+        if (ii < 0 || jj < 0 || ii >= WEAR || jj >= WEAR) continue;
+        const pp = jj * WEAR + ii;
+        game.wear[pp] = Math.min(255, game.wear[pp] + (di || dj ? 14 : 40));
+      }
+    }
+  }
+  game.wearVersion++;
+}
+for (let i = 0; i < +(q.get('cracks') || 0); i++) addCrack();
+if (q.has('gild')) gild(+q.get('gild') || 0.5);
+if (q.has('heal')) healAll();
+if (q.has('wear')) { addWear(); addWear(); }
+if (q.has('gold')) for (let i = 0; i < 6; i++) sand.pour(rnd() * 1.4 - 0.7, rnd() * 1.4 - 0.7, (+q.get('gold') || 300) / 6, 1, 0.08);
+if (toggles.floorEngr) state.seen.floor = true;
+if (toggles.floor) { modes = ['floor']; amp = 1.2; drive(); }
+
+// pre-simulate the sand so the figure has formed
+const pre = +(q.get('secs') || 0);
+for (let i = 0; i < pre * 30; i++) { field.update(1 / 30); sand.update(1 / 30); }
+if (pre) stepFake(0);
+
+// ---- view + renderer --------------------------------------------------------------------------
+function resize() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const vw = window.innerWidth, vh = window.innerHeight;
+  game.view = computeView(vw, vh, dpr);
+  glCanvas.width = Math.round(vw * dpr); glCanvas.height = Math.round(vh * dpr);
+  glCanvas.style.width = vw + 'px'; glCanvas.style.height = vh + 'px';
+  gfx?.resize?.();
+}
+let gfx = null;
+resize();
+gfx = createRenderer(glCanvas, game);
+if (toggles.engr || q.has('engr')) gfx.setEngravings?.(PH_ENGR, PH_FLOOR);
+else gfx.setEngravings?.(null, PH_FLOOR);
+window.addEventListener('resize', resize);
+if (q.has('debug')) gfx.debug?.(+q.get('debug'));
+
+// ---- panel -------------------------------------------------------------------------------------
+const modeRow = document.getElementById('modes');
+for (const m of BOWABLE.filter((m) => m.k <= 41)) {
+  const b = document.createElement('button');
+  b.textContent = m.id;
+  b.onclick = () => { modes = [m.id]; amp = 0.8; drive(); sync(); };
+  modeRow.appendChild(b);
+}
+function sync() {
+  for (const b of panel.querySelectorAll('[data-t]')) b.classList.toggle('on', !!toggles[b.dataset.t]);
+  for (const b of modeRow.children) b.classList.toggle('on', modes.includes(b.textContent));
+  document.getElementById('figs').classList.toggle('hide', !toggles.figs);
+}
+panel.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.t) {
+    toggles[b.dataset.t] = !toggles[b.dataset.t];
+    if (b.dataset.t === 'engr') gfx.setEngravings?.(toggles.engr ? PH_ENGR : null, PH_FLOOR);
+    if (b.dataset.t === 'floorEngr') state.seen.floor = toggles.floorEngr;
+    if (b.dataset.t === 'floor') { modes = toggles.floor ? ['floor'] : ['3.5-']; amp = toggles.floor ? 1.2 : 0.8; drive(); }
+  }
+  const a = b.dataset.a;
+  if (a === 'crack') addCrack();
+  if (a === 'gild') gild(0.25);
+  if (a === 'heal') healAll();
+  if (a === 'wear') addWear();
+  if (a === 'gold') for (let i = 0; i < 4; i++) sand.pour(rnd() * 1.4 - 0.7, rnd() * 1.4 - 0.7, 60, 1, 0.06);
+  if (a === 'pour') sand.pour(rnd() - 0.5, rnd() - 0.5, 1500, 0, 0.12);
+  if (a === 'shake') game.fx.shake = 1;
+  if (a === 'flash') game.fx.flash = 1;
+  if (a === 'flicker') game.light.flicker = 1;
+  if (a === 'more') for (let i = 0; i < 4; i++) addSinger(fake.length);
+  if (a === 'fewer') fake.splice(Math.max(0, fake.length - 4));
+  if (a === 'silence') { modes = []; drive(); }
+  sync();
+});
+const figs = document.getElementById('figs');
+for (const sp of SPECIES.slice(0, 5)) {
+  const c = gfx.figureCanvas(sp.comps, 120);
+  c.style.width = '120px'; c.style.height = '120px';
+  figs.appendChild(c);
+}
+sync();
+
+// ---- loop ---------------------------------------------------------------------------------------
+const stat = document.getElementById('stat');
+const holdSim = q.has('hold');
+let last = performance.now(), fpsAcc = 0, fpsN = 0, fps = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  let dt = Math.min(1 / 20, Math.max(0.001, (now - last) / 1000));
+  last = now;
+  game.dt = dt; game.t += dt;
+  const L = game.light;
+  L.on = !toggles.dark;
+  const target = toggles.dark ? darkLevel : 1;
+  L.level += (target - L.level) * Math.min(1, dt * 3);
+  if (window.__instant) L.level = target;
+  L.flicker *= Math.exp(-dt * 3);
+  const fx = game.fx;
+  fx.choir += ((toggles.choir ? 1 : 0) - fx.choir) * Math.min(1, window.__instant ? 1 : dt * 0.6);
+  fx.floor += ((toggles.floor ? 1 : 0) - fx.floor) * Math.min(1, window.__instant ? 1 : dt * 0.5);
+  fx.shake = Math.max(0, fx.shake - dt * 2);
+  fx.flash = Math.max(0, fx.flash - dt * 1.5);
+  if (!holdSim) {
+    field.update(dt); sand.update(dt);
+    if (realLife) { field.setSource('chorus', realLife.chorus?.() || []); realLife.update(dt); } else stepFake(dt);
+  }
+  gfx.render();
+  fpsAcc += dt; fpsN++;
+  if (fpsAcc > 0.5) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0;
+    const i = gfx.info?.() || {};
+    stat.textContent = `${fps.toFixed(0)} fps · cpu ${(i.ms || 0).toFixed(2)} ms · ${gfx.kind} hdr=${i.hdr}\nmodes ${modes.join(',') || '—'} · total ${field.total.toFixed(2)} · sand ${sand.n}\nsingers ${game.life.instanceData?.().count || 0}`;
+  }
+}
+requestAnimationFrame(frame);
+window.H = { game, gfx, toggles, field, sand, fake, addCrack, healAll, gild, addWear, setModes(m, a = 0.8) { modes = m; amp = a; drive(); }, ready: true };
+</script>
+</body>
+</html>
