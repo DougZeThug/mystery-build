@@ -1,0 +1,38 @@
+/* Stillpoint — base styles. Single committed dark look. */
+@font-face { font-family: 'IM Fell English'; src: url('../assets/fonts/fell.woff2') format('woff2'); font-style: normal; font-weight: 400; font-display: block; }
+@font-face { font-family: 'IM Fell English'; src: url('../assets/fonts/fell-italic.woff2') format('woff2'); font-style: italic; font-weight: 400; font-display: block; }
+@font-face { font-family: 'IM Fell English SC'; src: url('../assets/fonts/fell-sc.woff2') format('woff2'); font-style: normal; font-weight: 400; font-display: block; }
+@font-face { font-family: 'Caveat'; src: url('../assets/fonts/caveat.woff2') format('woff2'); font-style: normal; font-weight: 400 700; font-display: block; }
+@font-face { font-family: 'Old Standard TT'; src: url('../assets/fonts/old-standard-400.woff2') format('woff2'); font-style: normal; font-weight: 400; font-display: block; }
+@font-face { font-family: 'Old Standard TT'; src: url('../assets/fonts/old-standard-400i.woff2') format('woff2'); font-style: italic; font-weight: 400; font-display: block; }
+@font-face { font-family: 'Old Standard TT'; src: url('../assets/fonts/old-standard-700.woff2') format('woff2'); font-style: normal; font-weight: 700; font-display: block; }
+
+:root {
+  color-scheme: dark;
+  --void: #0a0807;
+  --felt: #13100d;
+  --bronze: #8a6534;
+  --bronze-hi: #c79a55;
+  --sand: #e9dfc8;
+  --gold: #ffcc66;
+  --phosphor: #8fffd0;
+  --paper: #efe4cc;
+  --ink-keeper: #4a2f1c;
+  --ink-graphite: #3a3a40;
+  --stamp: #8c3324;
+  --font-print: 'IM Fell English', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --font-caps: 'IM Fell English SC', 'IM Fell English', Georgia, serif;
+  --font-hand: 'Caveat', 'Segoe Print', 'Bradley Hand', cursive;
+  --font-label: 'Old Standard TT', Georgia, 'Times New Roman', serif;
+}
+
+html, body { height: 100%; margin: 0; background: var(--void); color: var(--sand); overflow: hidden; }
+body { overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+canvas { position: fixed; inset: 0; display: block; touch-action: none; }
+#gl { z-index: 0; }
+#fx { z-index: 1; }
+#ui { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+#ui > * { pointer-events: auto; }
+
+/* ===== notebook (owned by the notebook module) ===== */
+/* ===== end notebook ===== */

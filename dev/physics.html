@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8"><title>physics harness</title>
+<style>body{margin:0;background:#111;color:#ccc;font:12px monospace}canvas{display:block}</style>
+<canvas id="c" width="600" height="600"></canvas><div id="info"></div>
+<script type="module">
+import { createField } from '../src/sim/field.js';
+import { createSand } from '../src/sim/sand.js';
+import { MODES } from '../src/sim/modes.js';
+const q = new URLSearchParams(location.search);
+const modes = (q.get('modes') || '3.5-').split(',');
+const secs = +(q.get('secs') || 6);
+const state = { plate: { fatigue: 0, cracks: [] } };
+const field = createField({ state });
+const sand = createSand(field, { state });
+sand.seedScatter(22000);
+field.setSource('test', modes.map((m) => ({ mode: m, amp: 0.8 / Math.sqrt(modes.length) })));
+const c = document.getElementById('c'), ctx = c.getContext('2d');
+const dt = 1 / 60;
+const t0 = performance.now();
+for (let s = 0; s < secs * 60; s++) { field.update(dt); sand.update(dt); }
+const ms = (performance.now() - t0) / (secs * 60);
+ctx.fillStyle = '#6a4a26'; ctx.fillRect(0, 0, 600, 600);
+const img = ctx.getImageData(0, 0, 600, 600);
+for (let i = 0; i < sand.n; i++) {
+  const px = ((sand.x[i] + 1) * 300) | 0, py = ((sand.y[i] + 1) * 300) | 0;
+  const p = (py * 600 + px) * 4;
+  img.data[p] = sand.kind[i] ? 255 : 235; img.data[p + 1] = sand.kind[i] ? 200 : 225; img.data[p + 2] = sand.kind[i] ? 80 : 200;
+}
+ctx.putImageData(img, 0, 0);
+document.getElementById('info').textContent = `modes=${modes} n=${sand.n} total=${field.total.toFixed(3)} ms/step=${ms.toFixed(2)} stable=${field.coherence.stable.toFixed(1)} peaks=${sand.peaks().length}`;
+window.done = true;
+</script>
