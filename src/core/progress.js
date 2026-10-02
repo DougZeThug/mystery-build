@@ -79,7 +79,7 @@ export function createProgress(game) {
       if (floorTimer > 0) {
         floorTimer -= dt;
         fx.floor = Math.min(1, fx.floor + dt * 0.5);
-        if (floorTimer <= 0) game.field.setSource('floor', []);
+        if (floorTimer <= 0) { game.field.setSource('floor', []); bus.emit('floor:end', {}); }
       } else fx.floor = Math.max(0, fx.floor - dt * 0.15);
       fx.shake = Math.max(0, fx.shake - dt * 2);
       fx.flash = Math.max(0, fx.flash - dt * 1.5);
