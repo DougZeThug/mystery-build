@@ -47,7 +47,8 @@ export const TUNE = {
   feedGain: 0.1,         // dE/dt from agreeable sound (soft-saturated feed)
   harm: 0.55,            // ...and from disagreeable sound, relative (discord starves more slowly than harmony feeds)
   selfExclude: 0.55,     // share of a species' own song it cannot live on
-  hearMax: 0.8,          // a mode louder than this feeds (or starves) them no more than this
+  hearMax: 0.85,         // they hear the plate's total loudness only up to this (an over-driven plate starves no faster)
+  deafen: 0.6,           // discord's harm × (1 - deafen·overdrive): a screaming plate is din, not discord
   beat: 0.5, beatFrom: 10, beatScale: 12,   // a crowded pitch beats: unison value 1 - beat·(voices - from)/scale
   metab: 0.0075, metabBase: 0.45, metabSlope: 1.0,   // metabolism = metab·(base + slope·e): bright singers burn faster
   ageCost: 0.004, crowdK: 21, crowdStress: 0.06, stillPenalty: 0.45, detunePenalty: 9,
@@ -415,11 +416,14 @@ export function createLife(game) {
   // feed per species: what the plate's sound gives each species (own song partly excluded)
   function computeFeed(fromChorus) {
     actN = 0;
+    let heard2 = 0;
     for (let i = 0; i < NM; i++) {
-      let a = fromChorus ? chorusAmp[i] : (field.ampIndex ? field.ampIndex(i) : field.amp(MODES[i].id));
-      if (a > TUNE.hearMax) a = TUNE.hearMax;          // past a certain loudness they hear no more (and starve no faster)
-      if (a > 0.003) { actIdx[actN] = i; actAmp[actN] = a; actN++; }
+      const a = fromChorus ? chorusAmp[i] : (field.ampIndex ? field.ampIndex(i) : field.amp(MODES[i].id));
+      if (a > 0.003) { actIdx[actN] = i; actAmp[actN] = a; actN++; heard2 += a * a; }
     }
+    // past a certain loudness they hear no more (an over-driven plate is noise to them, and starves
+    // them no faster than a loud one)
+    if (heard2 > TUNE.hearMax * TUNE.hearMax) { const k = TUNE.hearMax / Math.sqrt(heard2); for (let q = 0; q < actN; q++) actAmp[q] *= k; }
     // a crowded note is never quite in tune: many voices on one pitch beat against one another,
     // and to those who share that pitch the unison sours
     voicesK.fill(0);
@@ -627,11 +631,13 @@ export function createLife(game) {
     keeperSp.keeper = true;
     return keeperSp;
   }
-  // the path she keeps: a rounded square just inside the rim (clockwise on screen = angle rising)
+  // the path she keeps: a rounded square just inside the rim, by polar angle (clockwise on screen =
+  // angle rising, since v points down): r(φ) = R / (cos⁸φ + sin⁸φ)^(1/8)
   let RPU = 0, RPV = 0;
   function rimPoint(th) {
-    const c = Math.cos(th), s = Math.sin(th), R = TUNE.keeperRim;
-    RPU = R * Math.sign(c) * Math.pow(Math.abs(c), 0.25); RPV = R * Math.sign(s) * Math.pow(Math.abs(s), 0.25);
+    const c = Math.cos(th), s = Math.sin(th), c2 = c * c, s2 = s * s;
+    const r = TUNE.keeperRim / Math.pow(c2 * c2 * c2 * c2 + s2 * s2 * s2 * s2, 0.125);
+    RPU = r * c; RPV = r * s;
   }
   function summonKeeper(fresh, u = 0, v = 0) {
     if (keeperMote && !keeperMote.dead) return keeperMote;
@@ -685,18 +691,21 @@ export function createLife(game) {
       }
     } else {
       if (m.state === 'nestle') { setState(m, 'feed'); m.walkT = 2 + rng.next() * 2; }
-      // the rim, clockwise, in long patient stretches; at each pause she turns to look in at them
+      // the rim, clockwise, in long patient stretches; at each pause she turns to look in at them.
+      // Away from the rim (newly stood up, or back from a finger) she makes for it without pausing.
+      const rr = Math.hypot(m.u, m.v);
+      rimPoint(Math.atan2(m.v, m.u));
+      const offRim = rr < Math.hypot(RPU, RPV) - 0.1;
       m.walkT -= dt;
-      if (m.walkT <= 0) {
+      if (offRim && !floorOn) { if (m.state !== 'walk') setState(m, 'walk'); m.walkT = Math.max(m.walkT, 6); }
+      else if (m.walkT <= 0) {
         if (m.state === 'walk') { setState(m, 'feed'); m.walkT = (3 + rng.next() * 5) * (darkNow ? 1.6 : 1); }
         else { setState(m, 'walk'); m.walkT = 8 + rng.next() * 9; }
       }
       if (floorOn && m.state === 'walk') { setState(m, 'feed'); m.walkT = 3; }
-      const th = Math.atan2(m.v, m.u);
-      const offRim = Math.hypot(m.u, m.v) < TUNE.keeperRim * 0.85;
-      rimPoint(offRim ? Math.atan2(m.hy, m.hx) : th + 0.32);
+      rimPoint(offRim ? (rr > 0.05 ? Math.atan2(m.v, m.u) : Math.atan2(m.hy, m.hx)) : Math.atan2(m.v, m.u) + 0.32);
       tu = RPU; tv = RPV;
-      if (m.state === 'walk') want = pace * (offRim ? 1.3 : 1);
+      if (m.state === 'walk') want = offRim ? pace * 2 : pace;
       else { tu = 0; tv = 0; turnRate = 0.5; }       // turned toward the centre, still
     }
     steer(m, tu, tv);
@@ -731,6 +740,7 @@ export function createLife(game) {
     const sp = m.spec;
     let feed = sp.feed;
     if (m.state === 'cling') feed *= feed > 0 ? 0.5 : TUNE.braceHarm;   // pressed to the bronze, it holds its breath
+    if (feed < 0 && overdrive > 0) feed *= 1 - TUNE.deafen * overdrive;  // and a screaming plate is din, not discord
     if (feed > 0) {
       const still = clamp(m.F / (A * A + 0.02), 0, 1);
       feed *= m.vig * crowdMul * (1 - TUNE.stillPenalty * still) * (sp.aurata ? 1 : detuneMul);
@@ -1183,7 +1193,9 @@ export function createLife(game) {
   function checkFloor(dt) {
     if (floorCool > 0) floorCool -= dt;
     const fl = field.amp ? field.amp('floor') : 0;
+    const wasFloor = floorOn;
     floorOn = fl > 0.2;
+    if (wasFloor && !floorOn) stagger();               // fed by the floor, they do not all divide at once after it
     let have = 0;
     for (const k of TUNE.floorKs) {
       for (const sp of alive) if (sp.ks.includes(k)) { have++; break; }

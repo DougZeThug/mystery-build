@@ -6,15 +6,15 @@ import { makeRng } from '../src/core/rng.js';
 import { newState } from '../src/core/persist.js';
 import { createField } from '../src/sim/field.js';
 import { createSand } from '../src/sim/sand.js';
-import { createLife, TUNE, STATE_CODE } from '../src/sim/life.js';
-import { nameFor, noteFor, speciesRatioText, NOTE_COUNT, colourFor } from '../src/sim/naming.js';
-import { MODES } from '../src/sim/modes.js';
+import { createLife, TUNE, STATE_CODE, FLAG, KEEPER_ID } from '../src/sim/life.js';
+import { nameFor, noteFor, speciesRatioText, NOTE_COUNT, colourFor, KEEPER } from '../src/sim/naming.js';
+import { MODES, modeById, evalMode } from '../src/sim/modes.js';
 
-function makeGame(seed = 5, state = newState()) {
+function makeGame(seed = 5, state = newState(), grains = 9000) {
   const rng = makeRng(seed);
   const field = createField({ state, bus, rng });
   const sand = createSand(field, { state, bus });
-  sand.seedScatter(9000);
+  sand.seedScatter(grains);
   const game = { t: 0, rng, bus, state, field, sand, light: { on: true, level: 1 }, fx: {}, hold: null,
     wear: new Uint8Array(128 * 128), WEAR: 128, wearVersion: 0 };
   game.life = createLife(game);
@@ -38,7 +38,7 @@ function listen(types) {
 }
 const finite = (m) => [m.u, m.v, m.vx, m.vy, m.hx, m.hy, m.e, m.age, m.r].every(Number.isFinite);
 
-test('a held note quickens a singer within 15-40 s, with events and a record', () => {
+test('a held note quickens a singer, with events and a record', () => {
   const ev = listen(['mote:birth', 'species:new']);
   const g = makeGame(3);
   step(g, 45, '2.5-');
@@ -113,21 +113,249 @@ test('serialize -> JSON -> deserialize round trip', () => {
   g3.life.destroy();
 });
 
-test('old age crumbles into sand and gold; walking off the edge is a fall', () => {
+test('old age crumbles into sand and gold (flag 128 while dying); only a throw goes over the edge', () => {
   const ev = listen(['mote:death', 'mote:fall']);
   const g = makeGame(6);
   const old = g.life.spawn('1.3+', 0.4, 0.4, 0.8, { silent: true });
   old.age = old.life - 0.1;
   const goldBefore = countGold(g.sand);
-  step(g, 3);
+  let ageFlag = false;
+  for (let i = 0; i < 90; i++) {
+    step(g, 1 / 30);
+    const inst = g.life.instanceData();
+    for (let j = 0; j < inst.count; j++) if (inst.data[j * 16 + 15] & FLAG.ageDeath) ageFlag = true;
+  }
   assert.ok(ev.seen['mote:death'].some((d) => d.cause === 'age' && d.mote === old));
+  assert.ok(ageFlag, 'no death-by-age flag (128) while crumbling');
   assert.ok(countGold(g.sand) > goldBefore, 'no gold left behind');
-  const m = g.life.spawn('1.3+', 0.95, 0, 0.8, { silent: true });
-  m.state = 'startle'; m.dur = 0.55; m.st = 0; m.kx = 3; m.scool = 5;
+  // an ordinary jolt (a tap, a flinch) never carries a singer over the edge
+  const a = g.life.spawn('1.3+', 0.93, 0, 0.8, { silent: true });
+  a.state = 'startle'; a.dur = 0.55; a.st = 0; a.kx = 3; a.scool = 5;
+  step(g, 2);
+  assert.ok(!a.dead && a.state !== 'fall' && Math.abs(a.u) <= 0.95, 'a jolt threw a singer off');
+  // a throw does
+  const m = g.life.spawn('1.3+', 0.93, 0, 0.8, { silent: true });
+  m.state = 'startle'; m.dur = 0.8; m.st = 0; m.kx = 3; m.scool = 5; m.thrown = true;
   step(g, 2);
   assert.ok(ev.seen['mote:fall'].some((d) => d.mote === m));
   assert.ok(ev.seen['mote:death'].some((d) => d.cause === 'fall' && d.mote === m));
   ev.off(); g.life.destroy();
+});
+
+test('first births are quick: a steady figure at amp .45 quickens within 8-14 s; later ones keep their pace', () => {
+  for (const amp of [0.45, 0.8]) {
+    const ev = listen(['mote:birth']);
+    const g = makeGame(31, newState(), 20000);
+    let t = 0;
+    const times = [];
+    const off = bus.on('mote:birth', () => { g.state.stats.births++; times.push(t); });   // as progress.js does
+    while (t < 24) { step(g, 0.1, '2.5-', amp); t += 0.1; }
+    off(); ev.off(); g.life.destroy();
+    assert.ok(times.length >= 3, `amp ${amp}: only ${times.length} births in 24 s`);
+    assert.ok(times[0] >= 7 && times[0] <= 14, `amp ${amp}: first birth at ${times[0].toFixed(1)} s`);
+    assert.ok(times[2] <= 22, `amp ${amp}: third birth at ${times[2].toFixed(1)} s`);
+  }
+  // an experienced plate (three births already) keeps the old, slower gestation
+  const st = newState(); st.stats.births = 3;
+  st.species['1.2+'] = { id: '1.2+', name: 'x' }; st.species['1.3+'] = { id: '1.3+', name: 'y' }; st.species['2.3+'] = { id: '2.3+', name: 'z' };
+  const ev = listen(['mote:birth']);
+  const g = makeGame(31, st, 20000);
+  step(g, 18, '2.5-', 0.8);
+  ev.off(); g.life.destroy();
+  assert.equal(ev.seen['mote:birth'].length, 0, 'late births should not be hurried');
+});
+
+// a point near the rim where a mode is loudest (a strong antinode)
+function loudSpot(modeId, rimMin = 0.8) {
+  const md = modeById(modeId);
+  let best = null, bv = -1;
+  for (let i = 0; i <= 40; i++) for (let j = 0; j <= 40; j++) {
+    const u = -0.9 + 1.8 * i / 40, v = -0.9 + 1.8 * j / 40;
+    if (Math.max(Math.abs(u), Math.abs(v)) < rimMin || Math.hypot(u, v) < 0.3) continue;
+    const f = Math.abs(evalMode(md, u, v));
+    if (f > bv) { bv = f; best = { u, v }; }
+  }
+  return best;
+}
+
+test('violence: a singer clings (state, flag 256) for seconds before it can fall; still points shelter it', () => {
+  const ev = listen(['mote:cling', 'mote:fall', 'mote:throw']);
+  const g = makeGame(41);
+  const modes = ['4.6+', '3.7-', '5.6-', '2.7+'];
+  const spot = loudSpot(modes[0]);
+  const ms = [];
+  for (let i = 0; i < 6; i++) ms.push(g.life.spawn('1.3+', spot.u + (i % 3 - 1) * 0.05, spot.v + (i > 2 ? 0.05 : -0.05), 0.5 + i * 0.08, { silent: true }));
+  const firstCling = new Map(), fellAt = new Map();
+  let clingFlag = false, t = 0;
+  for (let i = 0; i < 25 * 30; i++) {
+    const md = modes[Math.floor(t / 1.5) % modes.length];
+    step(g, 1 / 30, md, 1.15); t += 1 / 30;
+    for (const m of ms) {
+      if (m.state === 'cling' && !firstCling.has(m)) firstCling.set(m, t);
+      if (m.state === 'fall' && !fellAt.has(m)) fellAt.set(m, t);
+    }
+    if (!clingFlag) {
+      const inst = g.life.instanceData();
+      for (let j = 0; j < inst.count; j++) if (inst.data[j * 16 + 15] & FLAG.cling) {
+        clingFlag = true;
+        assert.equal(Math.floor(inst.data[j * 16 + 5]), STATE_CODE.startle, 'cling is drawn as a startle shiver');
+      }
+    }
+  }
+  assert.ok(firstCling.size >= 4, `only ${firstCling.size} clung`);
+  assert.ok(clingFlag, 'no cling flag (256) in the instance data');
+  assert.ok(ev.seen['mote:cling'].length >= firstCling.size);
+  for (const [m, tf] of fellAt) {
+    assert.ok(firstCling.has(m), 'fell without clinging first');
+    assert.ok(tf - firstCling.get(m) >= 1.5, `fell ${(tf - firstCling.get(m)).toFixed(2)} s after it began to cling`);
+  }
+  assert.ok(ev.seen['mote:fall'].length <= ev.seen['mote:throw'].length, 'every fall follows a throw');
+  assert.ok(fellAt.size < ms.length, 'all six fell: too harsh');
+  ev.off(); g.life.destroy();
+
+  // the same violence beside a resting finger, or a felt damper: no one falls
+  for (const shelter of ['hold', 'damper']) {
+    const ev2 = listen(['mote:fall', 'mote:throw']);
+    const g2 = makeGame(41);
+    const ms2 = [];
+    for (let i = 0; i < 5; i++) ms2.push(g2.life.spawn('1.3+', spot.u + (i % 3 - 1) * 0.05, spot.v + (i > 2 ? 0.05 : -0.05), 0.5, { silent: true }));
+    if (shelter === 'hold') g2.hold = { u: spot.u, v: spot.v, t: 0 };
+    else g2.field.dampers = [{ u: spot.u, v: spot.v, r: 0.06 }];
+    let t2 = 0;
+    for (let i = 0; i < 25 * 30; i++) {
+      if (shelter === 'damper') g2.field.dampers = [{ u: spot.u, v: spot.v, r: 0.06 }];
+      step(g2, 1 / 30, modes[Math.floor(t2 / 1.5) % modes.length], 1.15); t2 += 1 / 30;
+    }
+    const near = (m) => Math.hypot(m.u - spot.u, m.v - spot.v) < 0.25;
+    assert.equal(ev2.seen['mote:fall'].filter((e) => ms2.includes(e.mote)).length, 0, `${shelter}: a sheltered singer fell`);
+    void near;
+    ev2.off(); g2.life.destroy();
+  }
+});
+
+test('the keeper: arrives once after the Floor, at the centre, immortal, silent, persistent', () => {
+  const ev = listen(['species:new', 'keeper:arrive', 'mote:eat', 'mote:fuse', 'mote:death', 'mote:fall', 'mote:cling']);
+  const g = makeGame(51);
+  for (let i = 0; i < 6; i++) g.life.spawn('1.3+', -0.5 + i * 0.2, 0.45, 0.8, { silent: true });
+  step(g, 3, '1.3+');
+  bus.emit('floor:end', {});
+  assert.equal(g.life.keeper, null, 'she waits a moment');
+  assert.equal(g.state.seen.keeperDue, true);
+  step(g, TUNE.keeperDelay + 0.5);
+  const k = g.life.keeper;
+  assert.ok(k, 'no keeper');
+  assert.equal(ev.seen['keeper:arrive'].length, 1);
+  assert.equal(ev.seen['keeper:arrive'][0].mote, k);
+  const spNew = ev.seen['species:new'].find((e) => e.species.id === KEEPER_ID);
+  assert.ok(spNew, 'no species:new for the keeper');
+  assert.equal(spNew.species.name, 'Vossia fundamentalis');
+  assert.deepEqual(spNew.species.comps, ['floor']);
+  assert.ok(Math.hypot(k.u, k.v) < 0.02, 'born at the centre');
+  assert.equal(k.state, 'born');
+  assert.equal(g.state.seen.keeper, true);
+  const rec = g.state.species[KEEPER_ID];
+  assert.equal(rec.name, KEEPER.name);
+  assert.match(rec.note, /^Walks the rim\. Does not eat, does not fade\./);
+  assert.equal(rec.ratio, 'k 2 · below the lowest note');
+  // flag 64, and she is big
+  step(g, TUNE.keeperBorn + 0.5);
+  assert.ok(Math.abs(k.r - TUNE.rBase * TUNE.keeperR) < 1e-6, `radius ${k.r}`);
+  let kFlag = 0;
+  const inst = g.life.instanceData();
+  for (let j = 0; j < inst.count; j++) if (inst.data[j * 16 + 15] & FLAG.keeper) { kFlag++; assert.equal(inst.data[j * 16 + 6], 0, 'n1 = 0: the fundamental'); }
+  assert.equal(kFlag, 1);
+  // a second Floor's end brings no second keeper
+  bus.emit('floor:end', {});
+  step(g, 5);
+  assert.equal(g.life.motes.filter((m) => m.keeper).length, 1);
+  assert.equal(ev.seen['keeper:arrive'].length, 1);
+  // she sings nothing into the plate, and counts for no choir
+  assert.ok(!g.life.chorus().some((c) => c.mode === 'floor'));
+  assert.equal(g.life.count, g.life.motes.filter((m) => !m.keeper && !m.dead && m.state !== 'die' && m.state !== 'fall').length);
+  const kp = g.life.populations().find((p) => p.keeper);
+  assert.ok(kp && kp.id === KEEPER_ID && kp.count === 1 && kp.amp === 0);
+  // immortal: discordant company, violent bowing, a long time
+  const foes = [];
+  for (let i = 0; i < 4; i++) foes.push(g.life.spawn(['2.3-', '2.4-', '1.3+|2.4+'.split('|')[0], '3.4+'][i], k.u + 0.03, k.v, 0.9, { silent: true }));
+  k.age = 1e6;
+  step(g, 8, '3.7-', 1.15);
+  step(g, 20, '2.3-', 0.9);
+  assert.ok(!k.dead && g.life.keeper === k && !['die', 'fall', 'cling', 'startle'].includes(k.state), `keeper state ${k.state}`);
+  assert.ok(!ev.seen['mote:eat'].some((e) => e.prey === k || e.pred === k), 'the keeper ate or was eaten');
+  assert.ok(!ev.seen['mote:fuse'].some((e) => e.a === k || e.b === k), 'the keeper fused');
+  assert.ok(!ev.seen['mote:death'].some((e) => e.mote === k) && !ev.seen['mote:cling'].some((e) => e.mote === k));
+  assert.equal(g.state.species[KEEPER_ID].extinct, false);
+  // persisted: exactly one, where she was
+  const blob = JSON.parse(JSON.stringify(g.life.serialize()));
+  const where = { u: k.u, v: k.v };
+  ev.off(); g.life.destroy();
+  const g2 = makeGame(52, g.state);
+  const ev2 = listen(['keeper:arrive', 'species:new']);
+  g2.life.deserialize(blob);
+  assert.ok(g2.life.keeper, 'keeper not restored');
+  assert.ok(Math.abs(g2.life.keeper.u - where.u) < 1e-3 && Math.abs(g2.life.keeper.v - where.v) < 1e-3);
+  step(g2, 3);
+  bus.emit('floor:end', {});
+  step(g2, 5);
+  assert.equal(g2.life.motes.filter((m) => m.keeper).length, 1);
+  assert.equal(ev2.seen['keeper:arrive'].length, 0, 'a restored keeper is not announced again');
+  ev2.off(); g2.life.destroy();
+  // a save without her (but with the flag) still has her: she is immortal
+  const g3 = makeGame(53, g.state);
+  g3.life.deserialize({ ...blob, kp: null });
+  step(g3, 0.5);
+  assert.equal(g3.life.motes.filter((m) => m.keeper).length, 1);
+  g3.life.destroy();
+});
+
+test('the keeper walks the rim clockwise, comforts those near her, and comes first to a still finger', () => {
+  const g = makeGame(61);
+  for (let i = 0; i < 8; i++) g.life.spawn('1.3+', -0.4 + i * 0.1, 0.3, 0.6, { silent: true });
+  const k = g.life.summonKeeper(true);
+  step(g, TUNE.keeperBorn + 30, '1.3+', 0.6);
+  assert.ok(Math.hypot(k.u, k.v) > 0.62, `still at radius ${Math.hypot(k.u, k.v).toFixed(2)} after 30 s`);
+  // clockwise on screen = polar angle rising (v points down)
+  let turned = 0, prev = Math.atan2(k.v, k.u);
+  for (let i = 0; i < 60; i++) {
+    step(g, 1, '1.3+', 0.6);
+    const a = Math.atan2(k.v, k.u);
+    let d = a - prev; if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI;
+    turned += d; prev = a;
+    assert.ok(Math.abs(k.u) <= 0.9 && Math.abs(k.v) <= 0.9);
+  }
+  assert.ok(turned > 0.25, `turned ${turned.toFixed(2)} rad in 60 s (should be clockwise, slowly)`);
+  assert.ok(turned < 2.5, `turned ${turned.toFixed(2)} rad in 60 s (too fast)`);
+  // comfort: a singer beside her gains a little
+  const c = g.life.spawn('1.3+', k.u * 0.85, k.v * 0.85, 0.5, { silent: true });
+  step(g, 0.2);
+  assert.ok(c.comfort > 0, 'no comfort beside the keeper');
+  // the finger: across the plate from her; singers already near it wait for her
+  const hu = -Math.sign(k.u || 1) * 0.15, hv = -Math.sign(k.v || 1) * 0.15;
+  for (const m of g.life.motes) if (!m.keeper && !m.dead) { m.u = hu + (Math.random() - 0.5) * 0.4; m.v = hv + (Math.random() - 0.5) * 0.4; }
+  g.hold = { u: hu, v: hv, t: g.t };
+  let kAt = null, otherAt = null;
+  for (let i = 0; i < 20 * 30 && (kAt === null || otherAt === null); i++) {
+    step(g, 1 / 30);
+    if (kAt === null && k.state === 'nestle') kAt = g.t;
+    if (otherAt === null && g.life.motes.some((m) => !m.keeper && m.state === 'nestle')) otherAt = g.t;
+  }
+  assert.ok(kAt !== null, 'she never came to the finger');
+  assert.ok(otherAt === null || otherAt >= kAt - 1.5, `another came first (${otherAt?.toFixed(1)} vs ${kAt.toFixed(1)})`);
+  g.hold = null;
+  g.life.destroy();
+});
+
+test('the keeper does not stand up in the dark; she waits for the light', () => {
+  const g = makeGame(71);
+  g.light.on = false;
+  bus.emit('floor:end', {});
+  step(g, TUNE.keeperDelay + 4);
+  assert.equal(g.life.keeper, null);
+  assert.equal(g.life.keeperDue, true);
+  g.light.on = true;
+  step(g, 1);
+  assert.ok(g.life.keeper);
+  g.life.destroy();
 });
 function countGold(sand) { let n = 0; for (let i = 0; i < sand.n; i++) if (sand.kind[i] === 1) n++; return n; }
 
@@ -232,6 +460,9 @@ test('names: deterministic, distinct for every single mode, sensible hybrids', (
   assert.equal(nameFor(['1.3+', '2.4-']).epithet, 'diapasonica');
   assert.match(nameFor(['1.2+', '1.3+', '2.4-']).genus, /^(Scala|Symphonia|Polyphonia)$/);
   assert.match(nameFor(['2.5-'], true).name, / aurata$/);
+  assert.equal(nameFor(['floor']).name, 'Vossia fundamentalis');
+  assert.match(noteFor({ id: 'keeper', comps: ['floor'], ks: [2] }, { stats: {} }), /^Walks the rim\. Does not eat, does not fade\. Comes to a still finger before the others do\.$/);
+  assert.ok(!noteFor({ id: 'keeper' }, { stats: { nestles: 3 } }).includes('!'));
   assert.ok(nameFor(['1.3+', '2.4-'], false, true).name.split(' ').length === 3);
   assert.equal(speciesRatioText({ ks: [10, 20] }), 'k 10, 20 (1:2)');
   assert.ok(colourFor('1.3+').every((x) => x >= 0 && x <= 1));
