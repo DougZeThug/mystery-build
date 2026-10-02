@@ -33,10 +33,11 @@
       <button id="light">light</button>
       <button data-speed="1" class="on">×1</button><button data-speed="4">×4</button><button data-speed="16">×16</button>
       <button id="fresh">reseed</button>
+      <button id="floor" title="force the Floor (18 s); its end brings the keeper, once">floor</button>
       <span id="clock"></span>
     </div>
     <div class="bar" id="modes"></div>
-    <div style="color:var(--dim)">click plate: tap · hold still on plate: resting finger · click a singer: its note</div>
+    <div style="color:var(--dim)">click plate: tap · hold still on plate: resting finger · click a singer: its note · red ring: clinging · pale ring: the keeper</div>
   </section>
   <section>
     <h2>populations</h2><div id="pops"></div>
@@ -66,7 +67,7 @@ function build(seed) {
   const rng = makeRng(seed);
   field = createField({ state, bus, rng });
   sand = createSand(field, { state, bus });
-  sand.seedScatter(15000);
+  sand.seedScatter(20000);
   game = { t: 0, dt: 1 / 30, rng, bus, state, field, sand, light: { on: true, level: 1 }, fx: {}, hold: null,
     wear: new Uint8Array(128 * 128), WEAR: 128, wearVersion: 0 };
   life?.destroy?.();
@@ -76,7 +77,7 @@ function build(seed) {
 }
 build(+(q.get('seed') || 7));
 
-for (const type of ['species:new', 'species:extinct', 'mote:fuse', 'mote:eat', 'mote:fall', 'life:choir', 'life:floor']) {
+for (const type of ['species:new', 'species:extinct', 'mote:fuse', 'mote:eat', 'mote:fall', 'life:choir', 'life:floor', 'keeper:arrive']) {
   bus.on(type, (p) => {
     const t = observationFor(type, p);
     if (t) logLines.push(`<b>${clock(game.t)}</b> ${t}`);
@@ -96,6 +97,8 @@ for (const m of BOWABLE) {
   b.dataset.mode = m.id;
   modesEl.appendChild(b);
 }
+bus.on('mote:birth', () => { game.state.stats.births++; });     // as progress.js does
+document.getElementById('floor').onclick = () => bus.emit('life:floor', { on: true });
 document.getElementById('silence').onclick = () => { bowMode = null; syncButtons(); };
 document.getElementById('light').onclick = () => { game.light.on = !game.light.on; bus.emit('light', { on: game.light.on }); syncButtons(); };
 document.getElementById('fresh').onclick = () => { build((Math.random() * 1e9) | 0); bowMode = null; syncButtons(); };
@@ -131,7 +134,7 @@ setInterval(() => { if (down && !game.hold && performance.now() - down.t > 1200 
 // --- sim
 function step(dt) {
   field.setSource('bow', bowMode ? [{ mode: bowMode, amp: +document.getElementById('amp').value }] : []);
-  if (floorLeft > 0) { floorLeft -= dt; if (floorLeft <= 0) field.setSource('floor', []); }
+  if (floorLeft > 0) { floorLeft -= dt; if (floorLeft <= 0) { field.setSource('floor', []); bus.emit('floor:end', {}); } }
   field.setSource('chorus', life.chorus());
   field.update(dt); sand.update(dt); life.update(dt);
   game.t += dt;
@@ -144,6 +147,8 @@ if (q.get('script')) {
     bowMode = what === 'silence' ? null : (MODES.find((m) => m.id === what) ? what : null);
     if (what === 'dark') { game.light.on = false; bowMode = null; }
     if (what === 'light') { game.light.on = true; bowMode = null; }
+    if (what === 'floor') { bus.emit('life:floor', { on: true }); bowMode = null; }
+    if (what === 'keeper') { life.summonKeeper(true); bowMode = null; }
     if (what.startsWith('hold')) { const [, u, v] = what.split('_'); game.hold = { u: +u, v: +v, t: game.t }; bowMode = null; }
     for (let i = 0; i < +secs * 30; i++) step(1 / 30);
   }
@@ -226,15 +231,22 @@ function draw() {
     if (code === 9) { scale = 1 - 0.6 * prog; alpha *= 1 - prog; }         // die
     if (fl & 4) alpha = 1;
     const c = sp.colors[0];
-    const gold = Math.max(0, (age01 - 0.8) / 0.2);
+    const gold = fl & 64 ? 0.35 : Math.max(0, (age01 - 0.8) / 0.2);
     const col = (a) => `rgba(${(c[0] * (1 - gold) + gold) * 255 | 0},${(c[1] * (1 - gold) + 0.8 * gold) * 255 | 0},${(c[2] * (1 - gold) + 0.4 * gold) * 255 | 0},${a})`;
     const R = r * scale;
+    let jx = 0, jy = 0;
+    if (fl & 256) { const k = (1 - prog / 0.6) * 0.25 + 0.08; jx = Math.sin(game.t * 61 + n) * R * k; jy = Math.cos(game.t * 53 + n * 3) * R * k; }
+    if (fl & 64) {                                     // the keeper: a slow pale ring about her
+      ctx.strokeStyle = `rgba(255,236,190,${0.25 * alpha})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, R * (1.5 + 0.12 * Math.sin(game.t * 0.8)), 0, 7); ctx.stroke();
+    }
+    if (fl & 256) { ctx.strokeStyle = `rgba(255,120,90,${0.5 * alpha})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x + jx, y + jy, R * 1.25, 0, 7); ctx.stroke(); }
     const halo = ctx.createRadialGradient(x, y, 0, x, y, R * 2.6);
     halo.addColorStop(0, col(0.55 * alpha)); halo.addColorStop(0.4, col(0.18 * alpha)); halo.addColorStop(1, col(0));
     ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(x, y, R * 2.6, 0, 7); ctx.fill();
-    ctx.fillStyle = col(0.5 * alpha); ctx.beginPath(); ctx.arc(x, y, R, 0, 7); ctx.fill();
+    ctx.fillStyle = col(0.5 * alpha); ctx.beginPath(); ctx.arc(x + jx, y + jy, R, 0, 7); ctx.fill();
     const fig = figure(sp.comps, 48);
-    ctx.globalAlpha = alpha; ctx.drawImage(fig, x - R, y - R, 2 * R, 2 * R); ctx.globalAlpha = 1;
+    ctx.globalAlpha = alpha; ctx.drawImage(fig, x + jx - R, y + jy - R, 2 * R, 2 * R); ctx.globalAlpha = 1;
     // heading
     ctx.strokeStyle = col(0.7 * alpha); ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(x + m.hx * R, y + m.hy * R); ctx.lineTo(x + m.hx * R * 1.5, y + m.hy * R * 1.5); ctx.stroke();

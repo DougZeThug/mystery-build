@@ -68,8 +68,8 @@ export const TUNE = {
   clingBase: 1.6, clingE: 2.4, clingDrain: 0.7, clingDrainV: 0.6, clingRegen: 0.3, clingDazed: 0.35,
   throwBase: 0.6, throwV: 0.9, throwOver: 0.6, shelterHold: 0.26, shelterDamper: 0.15,
   // the keeper (after the first Floor): one, immortal, walks the rim
-  keeperR: 2.2, keeperSpeed: 0.028, keeperRun: 0.11, keeperRim: 0.8, keeperDelay: 2.5, keeperBorn: 4.5,
-  keeperReach: 0.25, keeperComfort: 0.015, keeperWait: 8, keeperGlow: 0.86,
+  keeperR: 2.2, keeperSpeed: 0.028, keeperRun: 0.16, keeperRim: 0.8, keeperDelay: 2.5, keeperBorn: 4.5,
+  keeperReach: 0.25, keeperComfort: 0.015, keeperWait: 12, keeperGlow: 0.86,
   // rare states
   choirMin: 3, choirPop: 12, choirCons: 0.1, choirHold: 5, choirLen: 34, choirCool: 600, choirBreak: 3,
   floorKs: [5, 10, 20, 40], floorHold: 6, floorCool: 150,

@@ -68,7 +68,7 @@ export function createRenderer(canvas, game) {
     pool(x, y) {
       const L = api.lamp;
       const d = Math.hypot(x - L.aimX, y - L.aimY) / Math.max(1, L.size);
-      return (0.8 * Math.exp(-d * d * 5.4) + 0.2 * Math.exp(-d * d * 1.75)) * (1 - smooth(0.78, 1.35, d));
+      return (0.76 * Math.exp(-d * d * 5.4) + 0.24 * Math.exp(-d * d * 1.75)) * (1 - smooth(0.8, 1.38, d));
     },
   };
   let debugMode = 0;

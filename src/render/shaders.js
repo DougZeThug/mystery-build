@@ -150,7 +150,7 @@ void main() {
   float pn = fbm(p * 9.0 + w * 1.4 + 8.0);
   float pit = vnoise(p * 48.0) * 0.55 + vnoise(p * 131.0) * 0.45;
   float edgeB = smoothstep(0.72, 1.0, rim) + 0.5 * smoothstep(1.2, 1.38, length(p));
-  float th = 0.66 - 0.09 * edgeB - 0.05 * tarn;
+  float th = 0.75 - 0.12 * edgeB - 0.04 * tarn;
   float grow = pn + (pit - 0.5) * 0.16 + (br - 0.5) * 0.05;
   float pat = smoothstep(th, th + 0.06, grow);
   float ring = smoothstep(th - 0.05, th, grow) - pat;
@@ -243,8 +243,8 @@ const vec3 SAND_SHD = vec3(0.258, 0.198, 0.125);   // #8b7b63
 const vec3 GOLD = vec3(1.0, 0.604, 0.133);         // #ffcc66
 const vec3 SEAM = vec3(1.0, 0.70, 0.34);           // kintsugi glow
 const vec3 PHOS = vec3(0.27, 1.0, 0.63);           // #8fffd0
-const vec3 VERD = vec3(0.046, 0.060, 0.050);       // old verdigris, greyed by a century of dust
-const vec3 VERD_CRUST = vec3(0.094, 0.112, 0.094);
+const vec3 VERD = vec3(0.060, 0.074, 0.062);       // old verdigris, greyed by a century of dust
+const vec3 VERD_CRUST = vec3(0.120, 0.138, 0.118);
 const float BRUSH_ANG = 0.11;
 
 float sdBox(vec2 q, vec2 b, float r) {
@@ -271,7 +271,7 @@ float pool(vec2 css) {
   float d = length(css - uAim) / (uPlate.z * 2.0);            // in plate widths
   float core = exp(-d * d * 5.4);
   float skirt = exp(-d * d * 1.75);
-  return (0.80 * core + 0.20 * skirt) * (1.0 - smoothstep(0.78, 1.35, d));
+  return (0.76 * core + 0.24 * skirt) * (1.0 - smoothstep(0.80, 1.38, d));
 }
 
 void main() {
@@ -346,8 +346,8 @@ void main() {
       float dd = length(dv);
       float r0 = dm.z;
       vec2 awayP = normalize(css - uLamp.xy);
-      float cast = length(dv - awayP * r0 * 0.16);
-      dampSh *= 1.0 - 0.5 * (1.0 - smoothstep(r0 * 0.92, r0 * 1.42, cast));
+      float dCast = length(dv - awayP * r0 * 0.16);
+      dampSh *= 1.0 - 0.5 * (1.0 - smoothstep(r0 * 0.92, r0 * 1.42, dCast));
       dampSh *= 1.0 - 0.35 * exp(-max(dd - r0 * 0.97, 0.0) / (r0 * 0.09));
       pol = max(pol, 0.55 * exp(-pow((dd - r0 * 1.2) / (r0 * 0.13), 2.0)) * (0.6 + 0.4 * vnoise(dv / r0 * 9.0)));
     }
@@ -1001,7 +1001,7 @@ void main() {
   float vig = 1.0 - smoothstep(0.35, 1.05, length(vq));
   c *= 0.55 + 0.45 * vig;
 
-  c = tonemap(c);
+  c = tonemap(c) * 0.97;                     // white sits just under the rail: nothing clips
   c = pow(c, vec3(1.0 / 2.2));
   c *= uFade;
 
