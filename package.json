@@ -9,5 +9,7 @@
     "build": "node scripts/build.mjs",
     "test": "node --test test/"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "esbuild": "^0.24.2"
+  }
 }

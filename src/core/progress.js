@@ -19,6 +19,16 @@ export function createProgress(game) {
   let floorTimer = 0;
   let choirOn = false;
 
+  // milestone flags (the notebook unlocks the keeper's pages from these)
+  const flag = (f) => { state.seen[f] = true; };
+  bus.on('mote:birth', () => flag('firstBirth'));
+  bus.on('mote:death', (e) => { if (e.cause === 'age') flag('firstGold'); });
+  bus.on('mote:fuse', () => flag('firstFusion'));
+  bus.on('plate:crack', () => flag('firstCrack'));
+  bus.on('plate:heal', () => flag('firstHeal'));
+  bus.on('light', (e) => { if (!e.on) flag('firstDark'); });
+  bus.on('life:choir', (e) => { if (e.on) flag('firstChoir'); });
+
   bus.on('mote:birth', () => { st.births++; });
   bus.on('mote:split', () => { st.splits++; });
   bus.on('mote:fuse', () => { st.fusions++; });
@@ -39,9 +49,27 @@ export function createProgress(game) {
 
   const speciesCount = () => Object.keys(state.species || {}).length;
 
+  // In the dark, with the bow still, the plate dreams: sand drifts into the figures of the extinct.
+  let darkFor = 0, dreamIdx = 0, dreamT = 0;
+  function dream(dt) {
+    const quiet = !game.tools?.bow?.bowing;
+    if (!game.light.on && quiet) darkFor += dt; else darkFor = 0;
+    if (darkFor < 8) { if (game.field.getSource('dream')) game.field.setSource('dream', []); return; }
+    const gone = Object.values(state.species || {}).filter((r) => r.extinct && r.comps?.length);
+    if (!gone.length) return;
+    dreamT -= dt;
+    if (dreamT <= 0) {
+      dreamT = 26;
+      const rec = gone[dreamIdx++ % gone.length];
+      game.field.setSource('dream', rec.comps.map((m) => ({ mode: m, amp: 0.2 / Math.sqrt(rec.comps.length) })));
+      if (!state.seen.dreamed) { state.seen.dreamed = true; bus.emit('log', { kind: 'dream', text: 'In the dark the sand moved by itself, into a figure I had not seen in some time.' }); }
+    }
+  }
+
   return {
     reveal, revealed,
     update(dt) {
+      dream(dt);
       state.playSeconds += dt;
       const pop = game.life?.motes?.length || 0;
       if (pop > st.maxPop) st.maxPop = pop;
