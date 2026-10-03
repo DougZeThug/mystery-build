@@ -45,7 +45,7 @@ export const TUNE = {
   chorusAmp: 0.42, chorusCount: 3, chorusMax: 0.9, breathDepth: 0.2, darkVoice: 0.6, voiceE: 0.4,
   // in darkness the bronze carries only a whisper of their sleep song (so the still plate can dream
   // of the dead); the sleepers still hear one another in full, so it feeds them as before
-  darkField: 0.06,
+  darkField: 0.06, wakeVoice: 4,   // ...and on waking they find their full voice over a few seconds
   // energy
   feedGain: 0.1,         // dE/dt from agreeable sound (soft-saturated feed)
   harm: 0.55,            // ...and from disagreeable sound, relative (discord starves more slowly than harmony feeds)
@@ -111,6 +111,7 @@ export function createLife(game) {
   let N = 0;                   // living (not dying/falling) singers
 
   // chorus output, pooled
+  let toField = 1;             // share of the population's song the bronze carries (TUNE.darkField in darkness)
   const chorusAmp = new Float32Array(NM);
   const chorusPool = MODES.map((m) => ({ mode: m.id, amp: 0 }));
   const chorusOut = [];
@@ -414,7 +415,6 @@ export function createLife(game) {
     const scale = tot > TUNE.chorusMax ? TUNE.chorusMax / tot : 1;
     if (scale < 1) { for (let i = 0; i < NM; i++) chorusAmp[i] *= scale; for (const sp of alive) sp.a *= scale; }
     chorusOut.length = 0;
-    const toField = dark ? TUNE.darkField : 1;
     for (let i = 0; i < NM; i++) {
       const a = chorusAmp[i] * toField;
       if (a > 0.002) { const c = chorusPool[i]; c.amp = Math.round(a * 500) / 500; chorusOut.push(c); }
@@ -425,7 +425,7 @@ export function createLife(game) {
   function computeFeed(fromChorus) {
     actN = 0;
     let heard2 = 0;
-    const direct = !fromChorus && darkNow ? 1 - TUNE.darkField : 0;   // the sleep song, heard through the air
+    const direct = fromChorus ? 0 : 1 - toField;   // the share of their song the bronze does not carry, heard through the air
     for (let i = 0; i < NM; i++) {
       let a = fromChorus ? chorusAmp[i] : (field.ampIndex ? field.ampIndex(i) : field.amp(MODES[i].id));
       if (direct) a += chorusAmp[i] * direct;
@@ -1319,6 +1319,9 @@ export function createLife(game) {
     const wasDark = darkNow;
     darkNow = game.light ? game.light.on === false : false;
     if (wasDark && !darkNow) stagger();               // waking: not everyone divides at once
+    const voiceT = darkNow ? TUNE.darkField : 1;      // hushed at once in the dark; full voice comes back slowly
+    toField += (voiceT - toField) * (1 - Math.exp(-dt / (voiceT > toField ? TUNE.wakeVoice : 0.5)));
+    if (Math.abs(voiceT - toField) < 1e-3) toField = voiceT;
     A = field.total || 0;
     Ajump = A - Aslow;
     overdrive = clamp((A - TUNE.overdriveA) / 0.4, 0, 1);

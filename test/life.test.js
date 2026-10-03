@@ -441,6 +441,51 @@ test('darkness: metabolism halves, no births, singers sleep', () => {
   ev.off(); g.life.destroy();
 });
 
+test('in the dark the plate dreams of the dead, even with sleepers on it; they wake to full voice', () => {
+  const g = makeGame(14, newState(), 14000);
+  const gone = g.life.spawn('3.4+', 0.5, 0.5, 0.05, { silent: true });
+  step(g, 0.2); gone.e = -0.001; step(g, 2);
+  assert.equal(g.state.species['3.4+'].extinct, true);
+  step(g, 40, '1.3+');
+  step(g, 6);
+  const living = g.life.count;
+  assert.ok(living >= 4, `only ${living} singers`);
+  const lit = g.field.total;
+  const ev = listen(['mote:birth', 'mote:split']);
+  g.light.on = false;
+  step(g, 3);
+  const dreamt = g.life.dreamingOf && g.state.species[g.life.dreamingOf];
+  assert.ok(dreamt, 'no dream');
+  const stillFrac = () => {
+    const mds = dreamt.comps.map(modeById);
+    let n = 0;
+    for (let i = 0; i < g.sand.n; i++) {
+      let f = 0; for (const md of mds) f += evalMode(md, g.sand.x[i], g.sand.y[i]);
+      if (Math.abs(f / mds.length) < 0.12) n++;
+    }
+    return n / g.sand.n;
+  };
+  const before = stillFrac();
+  const e0 = g.life.populations().reduce((s, p) => s + p.meanE * p.count, 0) / living;
+  step(g, 60);
+  assert.ok(g.field.total < 0.03, `the bronze still sings at ${g.field.total.toFixed(3)} in the dark`);
+  assert.ok(g.sand.dreaming !== false, 'the sand is not dreaming');
+  const after = stillFrac();
+  assert.ok(after > before + 0.08, `the sand did not drift toward ${dreamt.name}: ${before.toFixed(2)} -> ${after.toFixed(2)}`);
+  // the sleepers still hear one another: a minute of darkness costs them little
+  const n1 = g.life.count;
+  const e1 = g.life.populations().reduce((s, p) => s + (p.keeper ? 0 : p.meanE * p.count), 0) / Math.max(1, n1);
+  assert.ok(n1 >= living - 1 && e1 > e0 - 0.15, `darkness starved them: ${living} -> ${n1}, e ${e0.toFixed(2)} -> ${e1.toFixed(2)}`);
+  assert.equal(ev.seen['mote:birth'].length + ev.seen['mote:split'].length, 0, 'born in the dark');
+  // morning: hushed for a moment (the dream can be seen), then their full voice
+  g.light.on = true;
+  step(g, 1);
+  assert.ok(g.field.total < lit * 0.6, 'woke at full voice at once');
+  step(g, 12);
+  assert.ok(g.field.total > lit * 0.7, `voice did not come back: ${g.field.total.toFixed(2)} vs ${lit.toFixed(2)}`);
+  ev.off(); g.life.destroy();
+});
+
 test('walking polishes the bronze', () => {
   const g = makeGame(12);
   for (let i = 0; i < 6; i++) g.life.spawn('1.3+', -0.6 + i * 0.2, 0.2, 0.8, { silent: true });

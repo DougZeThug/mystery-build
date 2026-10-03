@@ -132,7 +132,7 @@ export function createPhonograph(env) {
     Hl = Pw * 1.02; Rb = Pw * 0.34; r0 = Math.max(2.5, Pw * 0.034);
     crankX = Pw / 2; crankY = Pd * 0.12; Ra = Pw * 0.09;
     slotH = Math.round(Math.max(19, Pw * 0.25)); rc = Math.min(slotH * 0.36, Pw * 0.1);
-    lw = Math.round(Math.max(88, Pw * 0.98));
+    lw = Math.round(Math.max(100, Pw * 1.0));
     Bw = Math.round(rc * 2 + 14); Rw = Bw + 6 + lw; Rh = Math.round(slotH * MAX_CYL + 10);
     place();
     bakeAll(dpr);
