@@ -10,10 +10,12 @@ export const GAPS = {
   tap: 0.05, split: 0.12, eat: 0.1, crumble: 0.1, fizzle: 0.12, fall: 0.15, birth: 0.14, fuse: 0.18,
   page: 0.06, scratch: 0.07, bowLift: 0.1, moth: 0.25, creak: 4, extinct: 0.8, reveal: 0.8,
   damper: 0.06, damperOff: 0.06, grab: 0.05, drop: 0.05, glass: 0.05, tick: 0.03, forkTouch: 0.2,
+  phonoNeedle: 0.25, phonoStop: 0.25, keeperArrive: 6,
 };
 // 2: always (rare, meaningful) · 1: normal · <1: dropped first when many voices are alive
 export const PRIORITY = {
-  crack: 2, heal: 2, floorBloom: 2, choirSwell: 2, lightOn: 2, lightOff: 2, cord: 2, fork: 2,
+  crack: 2, heal: 2, floorBloom: 2, choirSwell: 2, lightOn: 2, lightOff: 2, cord: 2, fork: 2, keeperArrive: 2,
+  phonoNeedle: 1.5, phonoStop: 1.5,
   birth: 1.5, fuse: 1.5, fall: 1.5, crumble: 1.2,
   creak: 0.3, reveal: 0.3, moth: 0.6, fizzle: 0.8, split: 0.8,
 };
@@ -25,6 +27,7 @@ export const LEVELS = {
   scratch: 12, bowLift: 14, birth: 4, split: 5, fuse: 2, eat: 3.5, crumble: 4, fizzle: 6, fall: 3,
   extinct: -5, choirSwell: 6, floorBloom: 0, creak: 11, cord: 13, lightOn: 9, lightOff: 11,
   drawer: 0, page: 6, bookOpen: 4, bookClose: 0, grab: 11, drop: 4, glass: 7, tick: 4, reveal: 8, moth: 6,
+  phonoNeedle: 4, phonoStop: 4, keeperArrive: 0,
 };
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
@@ -576,6 +579,109 @@ export function createSfx(E) {
     else { g.gain.linearRampToValueAtTime(peak, t + dur * 0.6); g.gain.linearRampToValueAtTime(0, t + dur); }
     if (st === 'land') burst(V, bus, t + dur * 0.8, { f: 4200, Q: 1.5, peak: 0.04, tau: 0.002 });
     V.done(t + dur + 0.05);
+  };
+
+  // --- the phonograph -----------------------------------------------------------------------------
+
+  // the needle set down on the wax: the arm's soft weight, a tiny contact click, a scrape as the
+  // stylus finds the groove (the continuous voice takes over: cutting hiss or the worn groove)
+  S.phonoNeedle = (p, t) => {
+    const V = E.voice(t), bus = V.gain(1);
+    V.out(bus, pan(p, 0.8), 0.18);
+    const e1 = thump(V, bus, t, 210, 120, 0.06, 0.022);
+    ping(V, bus, 2900, t + 0.004, 0.035, 0.005, 'sine', 0.0005);
+    burst(V, bus, t + 0.003, { f: 3600, Q: 1.2, peak: 0.12, tau: 0.003 });
+    const c = V.src('crackle', t + 0.01, { rate: 1.3 }), nz = V.src('white', t + 0.01), am = V.gain(0.2);
+    const bp = V.filt('bandpass', 2300, 0.9), g = V.gain(0);
+    c.connect(am.gain); nz.connect(am); am.connect(bp); bp.connect(g); g.connect(bus);
+    bp.frequency.setValueAtTime(3000, t + 0.01); bp.frequency.exponentialRampToValueAtTime(1700, t + 0.22);
+    const e2 = E.ahr(g.gain, t + 0.01, 0.02, 0.16, 0.08, 0.05);
+    V.stopAt(c, e2); V.stopAt(nz, e2);
+    V.done(Math.max(e1, e2));
+  };
+
+  // the needle lifted off and the brake lever set: a short upward scrape, a click, a knock
+  S.phonoStop = (p, t) => {
+    const V = E.voice(t), bus = V.gain(1);
+    V.out(bus, pan(p, 0.8), 0.18);
+    const c = V.src('crackle', t, { rate: 1.8 }), nz = V.src('white', t), am = V.gain(0.2);
+    const bp = V.filt('bandpass', 1900, 1.1), g = V.gain(0);
+    c.connect(am.gain); nz.connect(am); am.connect(bp); bp.connect(g); g.connect(bus);
+    bp.frequency.setValueAtTime(1800, t); bp.frequency.exponentialRampToValueAtTime(4400, t + 0.11);
+    const e1 = E.ahr(g.gain, t, 0.015, 0.12, 0.06, 0.025);
+    V.stopAt(c, e1); V.stopAt(nz, e1);
+    const tc = t + 0.15;
+    ping(V, bus, 2450, tc, 0.05, 0.008, 'sine', 0.0005);
+    ping(V, bus, 4100, tc + 0.002, 0.02, 0.004, 'sine', 0.0005);
+    const b = burst(V, bus, tc, { f: 3100, Q: 2, peak: 0.22, tau: 0.003 });
+    const e2 = thump(V, bus, tc + 0.004, 330, 190, 0.07, 0.014);
+    V.done(Math.max(e1, b.end, e2));
+  };
+
+  // --- the keeper ---------------------------------------------------------------------------------
+
+  // She stands up out of the bare bronze: a slow intake of breath, her low tones (110, 165) bloom,
+  // and over them one falling phrase in her own just intonation: up a fifth, a lingering minor
+  // sixth that leans back onto the fifth, then down the old lament (5 4 b3 2 1) to rest. Warm,
+  // breathy (the same formant as her continuous voice), mostly heard in the room.
+  S.keeperArrive = (p, t) => {
+    const R = 220;                                          // 55 · 4
+    const V = E.voice(t), bus = V.gain(1), lp = V.filt('lowpass', 2300, 0.5);
+    bus.connect(lp);
+    V.out(lp, pan(p, 0.5), 0.9, 0.75);
+    const fm = V.filt('peaking', 580, 1.2), body = V.gain(0);
+    fm.gain.value = 6;
+    fm.connect(body); body.connect(bus);
+    // ratio to 220, onset (s), glide into it (s)
+    const NOTES = [[1, 0, 0], [1.5, 0.95, 0.24], [1.6, 2.1, 0.12], [1.5, 2.7, 0.16], [4 / 3, 3.5, 0.14],
+      [6 / 5, 4.1, 0.13], [9 / 8, 4.7, 0.13], [1, 5.35, 0.2]];
+    const END = 6.9;                                       // the last note lets go here
+    const a = V.osc(E.waves.warm, R, t + 0.25), b = V.osc(E.waves.warm, R, t + 0.25, 6), gb = V.gain(0.5);
+    a.connect(fm); b.connect(gb); gb.connect(fm);
+    for (const o of [a, b]) {
+      o.frequency.setValueAtTime(R, t + 0.25);
+      for (let i = 1; i < NOTES.length; i++) {
+        const [r0] = NOTES[i - 1], [r1, on, gl] = NOTES[i];
+        o.frequency.setValueAtTime(R * r0, t + on - gl);
+        o.frequency.exponentialRampToValueAtTime(R * r1, t + on);
+      }
+    }
+    // a slow, human vibrato that grows on the long notes
+    const vib = V.osc('sine', 4.4, t), vg = V.gain(0);
+    vib.connect(vg); vg.connect(a.detune); vg.connect(b.detune);
+    vg.gain.setValueAtTime(0, t); vg.gain.linearRampToValueAtTime(9, t + 1.9);
+    vg.gain.setValueAtTime(9, t + 2.05); vg.gain.linearRampToValueAtTime(4, t + 2.3);
+    vg.gain.linearRampToValueAtTime(10, t + 3.4); vg.gain.setValueAtTime(10, t + 5.3);
+    vg.gain.linearRampToValueAtTime(3, t + 5.5); vg.gain.linearRampToValueAtTime(12, t + 6.8);
+    // phrasing: swell in, lean on the sixth, a breath before the descent, rest, let go
+    const G = body.gain, pk = 0.075;
+    G.setValueAtTime(0, t + 0.25);
+    G.linearRampToValueAtTime(pk * 0.8, t + 0.8);
+    G.linearRampToValueAtTime(pk, t + 1.6);
+    G.linearRampToValueAtTime(pk * 1.12, t + 2.15);
+    G.linearRampToValueAtTime(pk * 0.85, t + 3.2);
+    G.linearRampToValueAtTime(pk * 0.62, t + 3.42);
+    G.linearRampToValueAtTime(pk * 0.85, t + 3.6);
+    G.linearRampToValueAtTime(pk * 0.75, t + 5.2);
+    G.linearRampToValueAtTime(pk * 0.9, t + 5.6);
+    G.setTargetAtTime(0, t + END, 0.75);
+    // her own low tones under it (the 55 itself would not carry)
+    const lo = V.gain(0);
+    lo.connect(fm);
+    for (const [h, w] of [[2, 1], [3, 0.7], [4, 0.35]]) {
+      const o = V.osc('sine', 55 * h, t), g = V.gain(w);
+      o.connect(g); g.connect(lo);
+    }
+    lo.gain.setValueAtTime(0, t); lo.gain.linearRampToValueAtTime(0.04, t + 2.2);
+    lo.gain.setValueAtTime(0.04, t + END - 0.6); lo.gain.setTargetAtTime(0, t + END - 0.6, 1.0);
+    // breath: an intake before she sings, then air on every note
+    const nz = V.src('pink', t), nBp = V.filt('bandpass', 820, 1.3), nG = V.gain(0);
+    nz.connect(nBp); nBp.connect(nG); nG.connect(bus);
+    nBp.frequency.setValueAtTime(520, t); nBp.frequency.exponentialRampToValueAtTime(900, t + 0.5);
+    nG.gain.setValueAtTime(0, t); nG.gain.linearRampToValueAtTime(0.05, t + 0.4); nG.gain.linearRampToValueAtTime(0.014, t + 0.75);
+    nG.gain.setValueAtTime(0.014, t + END - 0.3); nG.gain.setTargetAtTime(0, t + END - 0.3, 0.5);
+    V.stopAt(nz, t + END + 4);
+    V.done(t + END + 0.75 * 8);
   };
 
   return S;

@@ -7,6 +7,8 @@ import { createEngine } from './engine.js';
 import { droneRootHz, foldInto, BUFFER_JOBS, reverbChannel, IR_SECONDS, resample } from './dsp.js';
 import { MODES, modeById } from '../sim/modes.js';
 
+const KEEPER_ID = 'keeper';
+
 const NM = MODES.length;
 const FLOOR_INDEX = MODES.findIndex((m) => m.special);
 const MUTE_KEY = 'stillpoint.muted';
@@ -23,9 +25,15 @@ export function makeSnapshot() {
     total: 0, stable: 0,             // field.total, field.coherence.stable
     sandN: 15000,                    // grains on the plate
     bow: { held: false, bowing: false, speed: 0, freq: 0, modeIndex: -1, pan: 0.4 },
-    species: [], nSpecies: 0,        // [{ id, ks, count, meanE, cu, aurata }]
+    species: [], nSpecies: 0,        // [{ id, ks, count, meanE, cu, aurata, cling }] (never the keeper)
+    clingN: 0,                       // singers clinging to the bronze right now (life state 'cling')
     dark: 0, hold: 0,                // light off; resting finger
     choir: 0, choirRoot: 0, floor: 0,
+    // the phonograph: cutting (rec), playing back (play), spring motor turning (motor); amps =
+    // what the cylinder is playing into the plate right now (field source 'phono'), per mode
+    phono: { rec: false, play: false, motor: false, pan: 0.45, amps: new Float32Array(NM) },
+    // the keeper (one, after the first Floor): alive, standing up (born), against a finger (nestle)
+    keeper: { on: false, e: 0.9, cu: 0, born: false, nestle: false },
   };
 }
 
@@ -39,6 +47,7 @@ export function createAudio(game) {
   let choirRoot = 0, choirRootAuto = 0;
   let bowFallback = null, bowFallbackT = 0;
   let hideTimer = 0, irSet = false;
+  let phonoRec = false, phonoPlay = false;           // from the bus, when tools has no public state
   // buffer data prepared in idle time, before and after the first gesture (see dsp.js BUFFER_JOBS)
   const prep = { rate: PREP_RATE, bufs: {}, ir: null, irRate: 0 };
   schedulePrep();
@@ -70,7 +79,8 @@ export function createAudio(game) {
       if (!E) return { state: ctx ? ctx.state : 'idle' };
       const v = E.voices;
       return { state: ctx.state, nodes: E.nodes, oneShots: E.oneShots, plate: v.plate.live, singers: v.singers.live,
-        bow: v.bow.live, drone: v.drone.live, floor: v.floor.live, sand: v.sand.live, sampleRate: ctx.sampleRate };
+        bow: v.bow.live, drone: v.drone.live, floor: v.floor.live, sand: v.sand.live, phono: v.phono.live,
+        phonoTones: v.phono.tones, keeper: v.keeper.live, clinging: snap.clingN, sampleRate: ctx.sampleRate };
     },
     destroy() {
       for (const off of offs) try { off(); } catch { /* gone */ }
@@ -201,25 +211,66 @@ export function createAudio(game) {
       sb.pan = bowPan(bowFallback);
     } else { sb.held = false; sb.bowing = false; sb.speed = 0; }
 
-    // living species
+    // living species (the keeper has her own voice)
     const pops = game.life?.populations?.();
+    const K = snap.keeper;
+    K.on = false;
     let n = 0;
     if (pops && pops.length) {
       for (let i = 0; i < pops.length && n < 64; i++) {
         const p = pops[i];
         if (!p || !(p.count > 0)) continue;
+        if (p.keeper || p.id === KEEPER_ID) {
+          K.on = true;
+          K.e = Number.isFinite(p.meanE) ? p.meanE : 0.9;
+          K.cu = Number.isFinite(p.cu) ? p.cu : 0;
+          continue;
+        }
         let e = snap.species[n];
-        if (!e) e = snap.species[n] = { id: '', ks: null, count: 0, meanE: 0, cu: 0, aurata: false };
+        if (!e) e = snap.species[n] = { id: '', ks: null, count: 0, meanE: 0, cu: 0, aurata: false, cling: 0 };
         e.id = typeof p.id === 'string' ? p.id : String(p.id);
         e.ks = p.ks && p.ks.length ? p.ks : ksFor(e.id, p.comps);
         e.count = p.count;
         e.meanE = Number.isFinite(p.meanE) ? p.meanE : 0.5;
         e.cu = Number.isFinite(p.cu) ? p.cu : 0;
         e.aurata = !!(p.species ? p.species.aurata : e.id.endsWith('*'));
+        e.cling = 0;
         n++;
       }
     }
     snap.nSpecies = n;
+
+    // who clings to the bronze (and how the keeper stands)
+    K.born = false; K.nestle = false;
+    let clingN = 0;
+    const motes = game.life?.motes;
+    if (motes && motes.length) {
+      for (let i = 0; i < motes.length; i++) {
+        const m = motes[i];
+        if (!m || m.dead) continue;
+        if (m.keeper) { K.born = m.state === 'born'; K.nestle = m.state === 'nestle'; continue; }
+        if (m.state !== 'cling') continue;
+        clingN++;
+        for (let j = 0; j < n; j++) if (snap.species[j].id === m.sp) { snap.species[j].cling++; break; }
+      }
+    }
+    snap.clingN = clingN;
+
+    // the phonograph (tools' public state when there is one, else what the bus said)
+    const ph = snap.phono, pub = game.tools?.phono;
+    const hasPub = !!(pub && typeof pub.recording === 'boolean');
+    ph.rec = hasPub ? pub.recording : phonoRec;
+    ph.play = phonoPlay && (!hasPub || !!pub.playing);
+    ph.motor = ph.rec || (hasPub ? !!pub.playing : phonoPlay);
+    ph.amps.fill(0);
+    if (ph.play && f && typeof f.getSource === 'function') {
+      const comps = f.getSource('phono');
+      if (comps) for (let i = 0; i < comps.length; i++) {
+        const c = comps[i], m = c && modeById(c.mode);
+        if (m && c.amp > 0) ph.amps[m.index] += +c.amp;
+      }
+    }
+    ph.pan = phonoPan();
 
     snap.dark = game.light && game.light.on === false ? 1 : 0;
     snap.hold = game.hold ? 1 : 0;
@@ -290,6 +341,10 @@ export function createAudio(game) {
     for (let i = 0; i < snap.nSpecies; i++) if (!best || snap.species[i].count > best.count) best = snap.species[i];
     return best ? foldInto(27.5 * Math.min(...best.ks), 110, 220) : 137.5;
   }
+  function phonoPan() {
+    const a = game.view?.anchors?.phonograph;
+    return a ? anchorPan('phonograph') : 0.45;
+  }
   function anchorPan(what) {
     const a = game.view?.anchors?.[what], vw = game.view?.vw;
     if (!a || !(vw > 0) || !Number.isFinite(a.x)) return 0;
@@ -353,6 +408,9 @@ export function createAudio(game) {
     } else { choirRootAuto = 0; }
   });
   on('life:floor', (e) => { if (e.on) play('floorBloom', {}); });
+  on('keeper:arrive', (e) => play('keeperArrive', { pan: uOf(e.mote) * 0.6 }));
+  on('phono:record', (e) => { phonoRec = !!e.on; });
+  on('phono:play', (e) => { phonoPlay = !!e.on; });
   on('light', (e) => play(e.on ? 'lightOn' : 'lightOff', { pan: anchorPan('cord') }));
   on('reveal', (e) => play('reveal', { pan: anchorPan(e.what) }));
   on('journal:open', () => play('bookOpen', { pan: anchorPan('journal') }));

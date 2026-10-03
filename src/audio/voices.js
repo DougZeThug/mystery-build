@@ -26,6 +26,7 @@ function glide(last, key, param, v, at, tau) {
 
 const PLATE_MAX = 10;
 const PLATE_LEVEL = 0.22;
+const PHONO_DUCK = 0.6;
 const PARTIAL = 2.72;
 
 export function createPlate(E) {
@@ -101,12 +102,16 @@ export function createPlate(E) {
       let sum = 0;
       for (let j = 0; j < count; j++) sum += Math.min(1.6, amps[order[j]]);
       const norm = sum > 1.1 ? Math.sqrt(1.1 / sum) : 1;   // many modes do not add up linearly
+      // what the phonograph is playing back is heard through its horn (phono.js); the bronze only
+      // rings along in sympathy, so its own voice steps back for those modes
+      const ph = snap.phono && snap.phono.play ? snap.phono.amps : null;
       for (let j = 0; j < count; j++) {
         const i = order[j], a = Math.min(1.6, amps[i]);
         const v = voice(i);
         if (!v.live) wake(v, at);
         v.stamp = stamp; v.idle = 0;
-        const lv = PLATE_LEVEL * Math.pow(a, 0.8) * norm;
+        const share = ph && ph[i] > 0 ? Math.min(1, ph[i] / Math.max(1e-3, amps[i])) : 0;
+        const lv = PLATE_LEVEL * Math.pow(a, 0.8) * norm * (1 - PHONO_DUCK * share);
         glide(v.last, 'g', v.out.gain, lv, at, lv > (v.last.g || 0) ? 0.025 : 0.09);
         glide(v.last, 'f', v.o1.frequency, v.f * (1 - det * 0.35), at, 0.25);
         if (det > 0.0005) {

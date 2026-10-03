@@ -292,7 +292,7 @@ export function createBow(env) {
     const span = Math.max(0.012, (t1 - t0 + Math.max(0, now - t1 - 34)) / 1000);
     return dist / span;
   }
-  let grabT = 0, bandT = 0, strokeT = -1, earlyPickT = -1e9;
+  let grabT = 0, bandT = 0, strokeT = -1, earlyPickT = -1e9, grabX = 0, grabY = 0;
   // a sample of the hand from each (coalesced) pointer event, at its own time; times never go back
   function sample(t, x, y) {
     const last = hN ? hT[(hHead - 1 + HN) % HN] : -1e9;
@@ -398,7 +398,7 @@ export function createBow(env) {
     grab.aFree = pose.a;
     if (fast) { grab.sx = L * 0.56; grab.sy = 0; }
     lastPx = px; lastPy = py; lastT = performance.now(); vpx = vpy = 0;
-    hN = 0; hPush(lastT, px, py); grabT = lastT; bandT = 0;
+    hN = 0; hPush(lastT, px, py); grabT = lastT; bandT = 0; grabX = px; grabY = py;
     sp = 0; spFast = 0; spPick = 0; amp = 0; curEdge = null;
     out.held = true;
     idle = 0;
@@ -517,7 +517,7 @@ export function createBow(env) {
       const dn = Math.abs((pose.x - tgt.x) * E.nx + (pose.y - tgt.y) * E.ny);
       const da = Math.abs(angDiff(pose.a, tgt.a)), df = Math.abs(pose.f - tgt.f);
       const settled = contact ? dn < 24 && da < 0.35 && df < 0.6 : dn < 10 && da < 0.2 && df < 0.35;
-      const fresh = grab.fast && nowC - grabT < 450;
+      const fresh = grab.fast && nowC - grabT < 450 && Math.hypot(lastPx - grabX, lastPy - grabY) > 1.5;   // (a tap is not a stroke)
       onEdge = settled || fresh || bandT > 0.07;
     }
     if (onEdge && !contact) startContact();

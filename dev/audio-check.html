@@ -89,6 +89,9 @@ const ONE_SHOTS = [
   ['moth', { state: 'arrive' }, 2],
   ['moth', { state: 'land' }, 1, 'moth · land'],
   ['moth', { state: 'leave' }, 2, 'moth · leave'],
+  ['phonoNeedle', { pan: 0.5 }, 1],
+  ['phonoStop', { pan: 0.5 }, 1],
+  ['keeperArrive', { pan: -0.2 }, 13],
 ];
 
 const idx = (id) => modeById(id).index;
@@ -127,6 +130,21 @@ const CONTINUOUS = [
   ['floor bloom', 8, (t, s) => {
     s.floor = t < 5 ? Math.min(1, t / 2) : Math.max(0, 1 - (t - 5) * 0.4);
     s.amps[MODES.findIndex((m) => m.special)] = s.floor * 1.2; s.total = s.floor * 1.2;
+  }],
+  ['phono · recording', 5, (t, s) => {
+    // the bow sings 2.4+ while the cylinder is cut: hiss + clockwork over the plate
+    s.phono.rec = t > 0.3 && t < 4.2; s.phono.motor = s.phono.rec; s.phono.play = false; s.phono.amps.fill(0);
+    s.amps[idx('2.4+')] = 0.5; s.total = 0.5;
+  }],
+  ['phono · playback', 6, (t, s) => {
+    // the cylinder plays 2.4+ and 1.3+ back into the plate: crackle bed + the horn's doubled voice
+    const P = s.phono; P.rec = false; P.motor = t > 0.2 && t < 5.2; P.play = t > 0.8 && t < 5.2; P.amps.fill(0);
+    if (P.play) { const e = Math.min(1, (t - 0.8) / 0.35, (5.2 - t) / 0.35 + 0.15); P.amps[idx('2.4+')] = 0.45 * e; P.amps[idx('1.3+')] = 0.3 * e; P.amps[idx('1.2+')] = 0.12 * e; }
+    for (let i = 0; i < s.amps.length; i++) s.amps[i] = P.amps[i] * 0.9;
+    let tot = 0; for (let i = 0; i < s.amps.length; i++) tot += s.amps[i] * s.amps[i]; s.total = Math.sqrt(tot);
+  }],
+  ['keeper · voice', 12, (t, s) => {
+    const K = s.keeper; K.on = t < 10.5; K.e = 0.95; K.cu = Math.sin(t * 0.3) * 0.8; K.born = t < 1.5; K.nestle = t > 6 && t < 8; s.dark = t > 8.5 ? 1 : 0;
   }],
   ['sand · rattle + pour', 3, (t, s, E) => { s.total = t < 2 ? 0.9 : 0; s.stable = t; if (t > 0.5 && t < 1.5) E.pour(12, -0.3); }],
 ];

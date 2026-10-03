@@ -11,6 +11,8 @@
 import { reverbIR, softClipCurve, BUFFER_JOBS, IR_SECONDS } from './dsp.js';
 import { createPlate, createBow, createSingers, createRoom, createDrone, createFloor, createSand } from './voices.js';
 import { createSfx, GAPS, PRIORITY, LEVELS } from './sfx.js';
+import { createPhono } from './phono.js';
+import { createKeeper } from './keeper.js';
 
 const SEND = { plate: 0.34, singer: 0.55, bow: 0.16, drone: 0.3 };   // reverb sends per bus
 const MAX_ONESHOTS = 24;
@@ -257,7 +259,9 @@ export function createEngine(ctx, { destination = null, fadeIn = 1.5, seed = 7, 
   const drone = createDrone(E);
   const floor = createFloor(E);
   const sand = createSand(E);
-  E.voices = { plate, bow, singers, room, drone, floor, sand };
+  const phono = createPhono(E);
+  const keeper = createKeeper(E);
+  E.voices = { plate, bow, singers, room, drone, floor, sand, phono, keeper };
   const sfx = createSfx(E);
   E.sfx = sfx;
 
@@ -295,6 +299,8 @@ export function createEngine(ctx, { destination = null, fadeIn = 1.5, seed = 7, 
     drone.update(snap, dt, at);
     floor.update(snap, dt, at);
     sand.update(snap, dt, at);
+    phono.update(snap, dt, at);
+    keeper.update(snap, dt, at);
   };
 
   // one-shots: name -> synth; returns false when dropped (unknown, throttled or over budget)

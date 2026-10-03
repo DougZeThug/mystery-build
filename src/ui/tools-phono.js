@@ -18,6 +18,77 @@ const FLY_S = 0.5;            // a cylinder carried between the rack and the man
 const SPIN = 2.6;             // revolutions per second (about 160 rpm)
 const EMPTY = [];
 
+// The plate's song on a cylinder at time t (seconds), eased linearly between quarter-second frames,
+// scaled by PLAY_GAIN, faded in/out over the first/last .35 s and capped at PLAY_NORM_MAX.
+// Writes into `comps` (a pool of {mode, amp}) and pushes the audible ones onto `live` (cleared).
+// Returns the resulting amplitude norm. Pure (no game state): unit-tested.
+export function mixFrames(frames, dt, t, dur, comps, live, valid = null) {
+  const F = frames || [];
+  live.length = 0;
+  if (!F.length) return 0;
+  dt = dt > 0 ? dt : REC_DT;
+  const f = Math.min(Math.max(t / dt, 0), F.length - 1);
+  const i = Math.floor(f), w = f - i;
+  const A = F[i] || EMPTY, B = F[Math.min(F.length - 1, i + 1)] || EMPTY;
+  let n = 0;
+  for (let a = 0; a < A.length && n < comps.length; a++) {
+    const id = A[a][0];
+    let bv = 0;
+    for (let b = 0; b < B.length; b++) if (B[b][0] === id) { bv = B[b][1]; break; }
+    comps[n].mode = id; comps[n].amp = A[a][1] * (1 - w) + bv * w; n++;
+  }
+  for (let b = 0; b < B.length && n < comps.length; b++) {
+    const id = B[b][0];
+    let seen = false;
+    for (let a = 0; a < A.length; a++) if (A[a][0] === id) { seen = true; break; }
+    if (!seen) { comps[n].mode = id; comps[n].amp = B[b][1] * w; n++; }
+  }
+  // ease in and out so the needle never clicks the plate
+  const envl = Math.max(0, Math.min(1, t / 0.35, (dur - t) / 0.35 + 0.15));
+  let s2 = 0;
+  for (let k = 0; k < n; k++) { const a = +comps[k].amp; comps[k].amp = (a > 0 ? a : 0) * PLAY_GAIN * envl; s2 += comps[k].amp * comps[k].amp; }
+  const norm = Math.sqrt(s2);
+  const sc = norm > PLAY_NORM_MAX ? PLAY_NORM_MAX / norm : 1;
+  for (let k = 0; k < n; k++) { comps[k].amp *= sc; if (comps[k].amp > 0.003 && (!valid || valid(comps[k].mode))) live.push(comps[k]); }
+  return Math.min(norm, PLAY_NORM_MAX);
+}
+
+// Spectrum entries [{mode, amp}] (loudest first) -> one compact frame [[modeId, amp .01], ...] (top 4).
+export function compactFrame(spectrum, n = TOP_N) {
+  const fr = [];
+  for (let i = 0; spectrum && i < spectrum.length && fr.length < n; i++) {
+    const e = spectrum[i];
+    const a = Math.round((+e.amp || 0) * 100) / 100;
+    if (a >= 0.01 && e.mode) fr.push([e.mode, a]);
+  }
+  return fr;
+}
+
+// A short pencilled note for a cylinder, from what was heard while it turned.
+//   rec = { n, choir, floor, dark, w: {genus: weight}, frames }, k(modeId) -> harmonic number
+export function cylinderLabel(rec, date = new Date(), k = null) {
+  const tw = timeWord(date);
+  const n = Math.max(1, rec.n || 0);
+  if ((rec.floor || 0) > n * 0.25) return 'below the floor';
+  if ((rec.choir || 0) > n * 0.4) return `the choir, ${tw}`;
+  const w = rec.w || {};
+  const gs = Object.keys(w).sort((a, b) => w[b] - w[a]);
+  const dark = (rec.dark || 0) > n * 0.5;
+  if (!gs.length) {
+    if (dark) return 'the dark plate';
+    let best = null, ba = 0;
+    for (const f of rec.frames || EMPTY) for (const [id, a] of f) if (a > ba) { ba = a; best = id; }
+    const kk = best && k ? k(best) : 0;
+    return kk ? `a bare plate, ${kk}` : `a silence, ${tw}`;
+  }
+  if (dark) return `the ${gs[0]} asleep`;
+  if (gs.length > 1 && w[gs[1]] >= w[gs[0]] * 0.5) {
+    const two = `${gs[0]} & ${gs[1]}`;
+    if (two.length <= 22) return two;
+  }
+  return `the ${gs[0]} ${tw}`;
+}
+
 const genusOf = (sp) => (sp && (sp.genus || (sp.name || '').split(' ')[0])) || '';
 function timeWord(d = new Date()) {
   const h = d.getHours();
@@ -432,14 +503,7 @@ export function createPhonograph(env) {
 
   // ---- recording -------------------------------------------------------------------------------
   function capture() {
-    const sp = game.field?.spectrum?.() || EMPTY;
-    const fr = [];
-    for (let i = 0; i < sp.length && fr.length < TOP_N; i++) {
-      const e = sp[i];
-      const a = Math.round((+e.amp || 0) * 100) / 100;
-      if (a >= 0.01 && e.mode) fr.push([e.mode, a]);
-    }
-    rec.frames.push(fr);
+    rec.frames.push(compactFrame(game.field?.spectrum?.() || EMPTY));
     // who was singing, for the label
     const pops = game.life?.populations?.() || EMPTY;
     for (const p of pops) {
@@ -452,28 +516,7 @@ export function createPhonograph(env) {
     if (game.light && !game.light.on) rec.dark++;
     rec.n++;
   }
-  function labelFor() {
-    const tw = timeWord();
-    const n = Math.max(1, rec.n);
-    if (rec.floor > n * 0.25) return 'below the floor';
-    if (rec.choir > n * 0.4) return `the choir, ${tw}`;
-    const gs = Object.keys(rec.w).sort((a, b) => rec.w[b] - rec.w[a]);
-    const dark = rec.dark > n * 0.5;
-    if (!gs.length) {
-      if (dark) return 'the dark plate';
-      // a bare plate: name it by its loudest note
-      let best = null, ba = 0;
-      for (const f of rec.frames) for (const [id, a] of f) if (a > ba) { ba = a; best = id; }
-      const m = best && Modes.modeById(best);
-      return m ? `a bare plate, ${m.k}` : `a silence, ${tw}`;
-    }
-    if (dark) return `the ${gs[0]} asleep`;
-    if (gs.length > 1 && rec.w[gs[1]] >= rec.w[gs[0]] * 0.5) {
-      const two = `${gs[0]} & ${gs[1]}`;
-      if (two.length <= 22) return two;
-    }
-    return `the ${gs[0]} ${tw}`;
-  }
+  function labelFor() { return cylinderLabel(rec, new Date(), (id) => Modes.modeById(id)?.k || 0); }
   function startRecord() {
     if (mode === 'play') stopPlay(true);
     mode = 'rec';
@@ -537,35 +580,8 @@ export function createPhonograph(env) {
     for (const f of cyl.frames || EMPTY) for (const e of f) if (Array.isArray(e)) acc[e[0]] = (acc[e[0]] || 0) + (+e[1] || 0);
     return Object.keys(acc).sort((a, b) => acc[b] - acc[a]).slice(0, n);
   }
-  // the plate's song at time t, eased between frames, into `comps`
-  function frameAt(cyl, t) {
-    const F = cyl.frames, dt = cyl.dt || REC_DT;
-    const f = clamp(t / dt, 0, F.length - 1);
-    const i = Math.floor(f), w = f - i;
-    const A = F[i] || EMPTY, B = F[Math.min(F.length - 1, i + 1)] || EMPTY;
-    let n = 0;
-    for (let a = 0; a < A.length && n < comps.length; a++) {
-      const id = A[a][0];
-      let bv = 0;
-      for (let b = 0; b < B.length; b++) if (B[b][0] === id) { bv = B[b][1]; break; }
-      comps[n].mode = id; comps[n].amp = (A[a][1] * (1 - w) + bv * w); n++;
-    }
-    for (let b = 0; b < B.length && n < comps.length; b++) {
-      const id = B[b][0];
-      let seen = false;
-      for (let a = 0; a < A.length; a++) if (A[a][0] === id) { seen = true; break; }
-      if (!seen) { comps[n].mode = id; comps[n].amp = B[b][1] * w; n++; }
-    }
-    // envelope: ease in and out so the needle never clicks the plate
-    const envl = Math.min(1, t / 0.35, (play.dur - t) / 0.35 + 0.15);
-    let s2 = 0;
-    for (let k = 0; k < n; k++) { comps[k].amp *= PLAY_GAIN * Math.max(0, envl); s2 += comps[k].amp * comps[k].amp; }
-    const norm = Math.sqrt(s2);
-    const sc = norm > PLAY_NORM_MAX ? PLAY_NORM_MAX / norm : 1;
-    live.length = 0;
-    for (let k = 0; k < n; k++) { comps[k].amp *= sc; if (comps[k].amp > 0.003 && Modes.modeById(comps[k].mode)) live.push(comps[k]); }
-    return Math.min(norm, PLAY_NORM_MAX);
-  }
+  const validMode = (id) => !!Modes.modeById(id);
+  function frameAt(cyl, t) { return mixFrames(cyl.frames, cyl.dt || REC_DT, t, play.dur, comps, live, validMode); }
 
   // ---- the carried cylinder --------------------------------------------------------------------
   function startFly(cyl, toRack, slot) { fly.on = true; fly.t = 0; fly.cyl = cyl; fly.toRack = toRack; fly.slot = slot; }
