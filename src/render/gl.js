@@ -580,6 +580,8 @@ export function createRenderer(canvas, game) {
       const engrVis = engrOn * (1 - level) * (1 - level);
       const floorTarget = game.state?.seen?.floor ? 1 : floorFx;
       floorEngr += (floorTarget - floorEngr) * Math.min(1, dt * 0.25);
+      // a renderer that starts on a plate already seen through (a reload) starts revealed
+      if (info.frames === 0) { engrOn = dark; floorEngr = floorTarget; phonoK = phOn; }
 
       uploadField(); uploadSand(); uploadWear(); updateCracks(t); updateEngravings(t);
 

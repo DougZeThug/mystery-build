@@ -18,6 +18,8 @@ const cases = [
   ['wander 1.15 x20s', [{ dur: 20, bow: WANDER, alt: 1.5, amp: 1.15 }]],
   ['wander 1.15 x40s', [{ dur: 40, bow: WANDER, alt: 1.5, amp: 1.15 }]],
   ['wander 1.15 x60s', [{ dur: 60, bow: WANDER, alt: 1.5, amp: 1.15 }]],
+  ['wander4 1.15 x20s', [{ dur: 20, bow: WANDER, alt: 4, amp: 1.15 }]],
+  ['wander4 1.15 x40s', [{ dur: 40, bow: WANDER, alt: 4, amp: 1.15 }]],
   ['wander 0.95 x40s', [{ dur: 40, bow: WANDER, alt: 1.5, amp: 0.95 }]],
   ['fixed 4.7+ 1.15 x20s', [{ dur: 20, bow: '4.7+', amp: 1.15 }]],
   ['fixed 4.7+ 1.15 x40s', [{ dur: 40, bow: '4.7+', amp: 1.15 }]],

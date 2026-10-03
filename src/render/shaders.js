@@ -348,10 +348,13 @@ void main() {
       float dd = length(dv);
       float r0 = dm.z;
       vec2 awayP = normalize(css - uLamp.xy);
-      float dCast = length(dv - awayP * r0 * 0.16);
-      dampSh *= 1.0 - 0.5 * (1.0 - smoothstep(r0 * 0.92, r0 * 1.42, dCast));
-      dampSh *= 1.0 - 0.35 * exp(-max(dd - r0 * 0.97, 0.0) / (r0 * 0.09));
-      pol = max(pol, 0.55 * exp(-pow((dd - r0 * 1.2) / (r0 * 0.13), 2.0)) * (0.6 + 0.4 * vnoise(dv / r0 * 9.0)));
+      float dCast = length(dv - awayP * r0 * 0.2);
+      dampSh *= 1.0 - 0.55 * (1.0 - smoothstep(r0 * 0.9, r0 * 1.5, dCast));      // soft cast shadow
+      dampSh *= 1.0 - 0.45 * exp(-max(dd - r0 * 0.97, 0.0) / (r0 * 0.1));        // contact
+      // the bronze it has been turned and slid on: a soft, swirled ring of polish
+      float ang = atan(dv.y, dv.x);
+      float swirl = 0.55 + 0.45 * vnoise(vec2(ang * 3.0 + dd / r0 * 4.0, dd / r0 * 14.0));
+      pol = max(pol, 0.75 * exp(-pow((dd - r0 * 1.3) / (r0 * 0.22), 2.0)) * swirl);
     }
     alb = mix(alb, alb * vec3(1.38, 1.24, 1.06) + vec3(0.016, 0.008, 0.002), pol);
     pat *= 1.0 - pol;
