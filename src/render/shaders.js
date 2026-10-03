@@ -132,11 +132,11 @@ void main() {
   // cleaner, warmer face where it was worked
   float lf = fbm(p * 1.1 + uSeed);
   float mf = fbm(p * 4.2 - 11.0 + uSeed);
-  vec3 base = vec3(0.082, 0.038, 0.014);
-  vec3 hi   = vec3(0.235, 0.112, 0.040);
+  vec3 base = vec3(0.070, 0.030, 0.0095);
+  vec3 hi   = vec3(0.230, 0.100, 0.030);
   vec3 alb = mix(base, hi, clamp(0.42 + (lf - 0.5) * 0.75, 0.0, 1.0));
-  alb *= mix(vec3(1.09, 0.92, 0.82), vec3(0.97, 1.0, 1.03), smoothstep(0.3, 0.7, mf));
-  alb *= 0.955 + 0.09 * br;
+  alb *= mix(vec3(1.08, 0.93, 0.84), vec3(0.97, 1.0, 1.02), smoothstep(0.3, 0.7, mf));
+  alb *= 0.95 + 0.10 * br;
 
   // tarnish: darker, browner blooms, more toward the rim
   float rim = max(abs(p.x), abs(p.y));
@@ -144,24 +144,26 @@ void main() {
   float tarn = smoothstep(0.50, 0.78, tn + 0.20 * smoothstep(0.55, 1.0, rim));
   alb *= mix(vec3(1.0), vec3(0.62, 0.52, 0.46), tarn * 0.5);
 
-  // verdigris: small, sparse and organic. It starts in the pits and in the tarnish near the rim,
-  // creeps along the brushing, and never quite covers the metal.
-  vec2 w = vec2(fbm(p * 5.5 + 1.7), fbm(p * 5.5 - 4.2));
-  float pn = fbm(p * 9.0 + w * 1.4 + 8.0);
-  float pit = vnoise(p * 48.0) * 0.55 + vnoise(p * 131.0) * 0.45;
-  float edgeB = smoothstep(0.72, 1.0, rim) + 0.5 * smoothstep(1.2, 1.38, length(p));
-  float th = 0.75 - 0.12 * edgeB - 0.04 * tarn;
-  float grow = pn + (pit - 0.5) * 0.16 + (br - 0.5) * 0.05;
-  float pat = smoothstep(th, th + 0.06, grow);
-  float ring = smoothstep(th - 0.05, th, grow) - pat;
-  pat *= smoothstep(0.22, 0.62, pit);                        // speckled, never a solid fill
-  float spk = smoothstep(0.9975 - 0.003 * edgeB, 1.0, hash12(floor(p * uTpu * 0.4) + uSeed));
-  pat = max(pat, spk * 0.55);
-  alb *= 1.0 - 0.18 * ring;
+  // verdigris: a few small colonies, mostly toward the rim and the corners. Each is a cluster of
+  // fine crystalline specks that grow out of the pits and along the grain; never a solid fill.
+  float corner = smoothstep(1.08, 1.38, length(p));
+  float edgeB = smoothstep(0.80, 0.99, rim) * 0.7 + corner * 0.5;
+  float colony = fbm(p * 1.9 + vec2(13.1, 4.7) + uSeed);
+  float allow = smoothstep(0.60, 0.74, colony + 0.10 * tarn + 0.16 * edgeB);
+  vec2 w = vec2(fbm(p * 8.0 + 1.7), fbm(p * 8.0 - 4.2));
+  float pit = vnoise(p * 70.0) * 0.6 + vnoise(p * 170.0) * 0.4;
+  float grow = fbm(p * 17.0 + w * 1.3 + 8.0) + (pit - 0.5) * 0.26 + (br - 0.5) * 0.10;
+  float th = 0.64 - 0.08 * allow;
+  float pat = smoothstep(th, th + 0.09, grow) * allow;
+  float ring = (smoothstep(th - 0.07, th, grow) - smoothstep(th, th + 0.09, grow)) * allow;
+  pat *= 0.35 + 0.65 * smoothstep(0.3, 0.75, pit);            // granular: the metal shows through
+  float spk = smoothstep(0.9982 - 0.002 * edgeB, 1.0, hash12(floor(p * uTpu * 0.45) + uSeed));
+  pat = max(pat, spk * 0.4 * (0.4 + 0.6 * edgeB));
+  alb *= 1.0 - 0.10 * ring;
 
   float scr = max(scratches(p, 5.0, 3.0 + uSeed, 0.30), max(scratches(p, 9.0, 11.0 + uSeed, 0.22), scratches(p, 17.0, 23.0 + uSeed, 0.16)));
-  float rough = clamp(0.40 + 0.16 * tarn + 0.08 * (mf - 0.5) + 0.6 * pat, 0.0, 1.0);
-  float cav = 1.0 - 0.14 * ring - 0.14 * tarn;
+  float rough = clamp(0.40 + 0.16 * tarn + 0.08 * (mf - 0.5) + 0.5 * pat, 0.0, 1.0);
+  float cav = 1.0 - 0.10 * ring - 0.14 * tarn;
 
   oA = vec4(pow(clamp(alb, 0.0, 1.0), vec3(1.0 / 2.2)), clamp(pat, 0.0, 1.0));
   oB = vec4(clamp(0.5 + slope * 2.2, 0.0, 1.0), scr, rough, cav);
@@ -237,14 +239,14 @@ uniform vec4 uDamp[6];     // felt dampers on the plate: u, v, r, on
 uniform sampler2D tMatA, tMatB, tFelt, tField, tSand, tWear, tCrack, tEngr, tLight;
 ${NOISE}
 #define T0(s, uv) textureLod(s, uv, 0.0)
-const vec3 LAMP_COL = vec3(1.0, 0.85, 0.68);
+const vec3 LAMP_COL = vec3(1.0, 0.83, 0.62);
 const vec3 SAND_LIT = vec3(0.815, 0.737, 0.578);   // #e9dfc8
 const vec3 SAND_SHD = vec3(0.258, 0.198, 0.125);   // #8b7b63
 const vec3 GOLD = vec3(1.0, 0.604, 0.133);         // #ffcc66
 const vec3 SEAM = vec3(1.0, 0.70, 0.34);           // kintsugi glow
 const vec3 PHOS = vec3(0.27, 1.0, 0.63);           // #8fffd0
-const vec3 VERD = vec3(0.060, 0.074, 0.062);       // old verdigris, greyed by a century of dust
-const vec3 VERD_CRUST = vec3(0.120, 0.138, 0.118);
+const vec3 VERD = vec3(0.050, 0.064, 0.054);       // old verdigris, greyed by a century of dust
+const vec3 VERD_CRUST = vec3(0.092, 0.112, 0.096);
 const float BRUSH_ANG = 0.11;
 
 float sdBox(vec2 q, vec2 b, float r) {
@@ -269,9 +271,9 @@ float sdHex(vec2 p, float r) {        // r = inradius (flat-to-centre)
 // a long faint skirt that leaves the corners in half-shadow, and then the felt falls to black.
 float pool(vec2 css) {
   float d = length(css - uAim) / (uPlate.z * 2.0);            // in plate widths
-  float core = exp(-d * d * 5.4);
-  float skirt = exp(-d * d * 1.75);
-  return (0.76 * core + 0.24 * skirt) * (1.0 - smoothstep(0.80, 1.38, d));
+  float core = exp(-d * d * 6.2);
+  float skirt = exp(-d * d * 2.4);
+  return (0.82 * core + 0.18 * skirt) * (1.0 - smoothstep(0.62, 1.18, d));
 }
 
 void main() {
@@ -356,8 +358,8 @@ void main() {
     rough = mix(rough, 0.3, pol * 0.5);
     slope *= 1.0 - 0.75 * pol;
     scr *= 1.0 - 0.8 * pol;
-    vec3 verd = mix(VERD, VERD_CRUST, smoothstep(0.3, 0.9, mA.a) * (0.35 + 0.65 * vnoise(pu * 90.0)));
-    alb = mix(alb, verd, pat * 0.72);
+    vec3 verd = mix(VERD, VERD_CRUST, smoothstep(0.25, 0.8, mA.a) * (0.3 + 0.7 * vnoise(pu * 140.0)));
+    alb = mix(alb, verd, pat * 0.62);
     // the edge was handled for a century: a little brighter, a little cleaner
     alb *= 1.0 + 0.12 * smoothstep(bw * 3.0, bw, din);
 
@@ -400,10 +402,10 @@ void main() {
     float TH = dot(T, H);
     // lobes sized for a lamp 1.6 plate-widths up: a tight hotspot, a soft sheen, the brushed streak.
     // Bronze reflects its own warm colour: copper-amber, never lemon.
-    float hot = pow(NdH, mix(170.0, 560.0, 1.0 - rough)) * mix(0.22, 0.62, 1.0 - rough);
-    float sheen = pow(NdH, 34.0) * 0.075;
-    float aniso = pow(sqrt(max(0.0, 1.0 - TH * TH)), mix(400.0, 1400.0, 1.0 - rough)) * pow(NdH, 16.0) * 0.75;
-    vec3 specCol = mix(alb * 2.4, vec3(0.56, 0.36, 0.22), 0.42) * (1.0 - pat * 0.92) + vec3(0.035, 0.026, 0.018) * pol;
+    float hot = pow(NdH, mix(200.0, 600.0, 1.0 - rough)) * mix(0.2, 0.55, 1.0 - rough);
+    float sheen = pow(NdH, 40.0) * 0.06;
+    float aniso = pow(sqrt(max(0.0, 1.0 - TH * TH)), mix(400.0, 1400.0, 1.0 - rough)) * pow(NdH, 36.0) * 0.5;
+    vec3 specCol = mix(alb * 2.6, vec3(0.58, 0.32, 0.14), 0.32) * (1.0 - pat * 0.9) + vec3(0.03, 0.02, 0.012) * pol;
     vec3 Ed = lampCol * E * sandShadow * dampSh;
 
     float shim = 1.0 + 0.16 * f * ph;

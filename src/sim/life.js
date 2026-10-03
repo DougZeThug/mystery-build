@@ -1073,10 +1073,12 @@ export function createLife(game) {
     if (early) {
       rate = clamp((field.total - TUNE.earlyFrom) / TUNE.earlyRange, 0, 1) * clamp((coh.share - 0.5) / 0.25, 0, 1) / TUNE.earlyGestation;
     } else {
-      const gest = knownKinds() < TUNE.earlyKinds ? TUNE.gestationFew : TUNE.gestation;
-      rate = clamp((field.total - minTotal + 0.08) / 0.6, 0, 1.4) * clamp((coh.share - 0.5) / 0.3, 0, 1) / gest;
+      // a new form comes a little sooner while the plate is young (fewer than earlyKinds known); a
+      // familiar one (its kind already alive) at its usual, quicker pace
       const domSp = species[dom.id];
-      if (domSp && domSp.n > 0) rate *= TUNE.familiar;
+      const gest = domSp && domSp.n > 0 ? TUNE.gestation / TUNE.familiar
+        : knownKinds() < TUNE.earlyKinds ? TUNE.gestationFew : TUNE.gestation;
+      rate = clamp((field.total - minTotal + 0.08) / 0.6, 0, 1.4) * clamp((coh.share - 0.5) / 0.3, 0, 1) / gest;
     }
     if (!driven) {                                   // a starving choir quickens nothing
       let se = 0, sn = 0;
