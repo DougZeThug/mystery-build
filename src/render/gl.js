@@ -109,8 +109,9 @@ export function createRenderer(canvas, game) {
 
     // dynamic data bookkeeping
     let fieldVer = -1, fieldG = 0, sandVer = -1, sandD = 0, wearVer = -1;
-    const ckBox = [0, 0, -1, -1], ckBB = [0, 0, -1, -1];
-    let ckSig = NaN, ckAt = -1, ckBuf = null, ckDist = null, ckW = null, ckGold = null, ckHeal = null;
+    // cracks: what was last rasterised, per crack, and scratch sized to the largest region redrawn
+    let ckSig = NaN, ckAt = -1, ckPrev = [];
+    let ckBuf = new Uint8Array(0), ckDist = new Float32Array(0), ckW = new Float32Array(0), ckGold = new Float32Array(0), ckHeal = new Uint8Array(0);
     let engrOn = 0, floorEngr = 0, lastT = 0, phonoK = 0;
     let keeperSig = '', keeperAt = -10, unhide = false;
     // singer instances, remapped to the canonical codes (see CANON_STATES / CANON_FLAGS)
@@ -371,12 +372,9 @@ export function createRenderer(canvas, game) {
       if (cs !== ckSize) {
         ckSize = cs; info.ckSize = cs;
         if (T.crack) gl.deleteTexture(T.crack);
-        ckBuf = new Uint8Array(cs * cs * 4);
-        for (let q = 2; q < ckBuf.length; q += 4) ckBuf[q] = 128;
-        ckDist = new Float32Array(cs * cs); ckW = new Float32Array(cs * cs);
-        ckGold = new Float32Array(cs * cs); ckHeal = new Uint8Array(cs * cs);
-        T.crack = tex(cs, cs, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, ckBuf);
-        ckSig = NaN; ckBox[0] = 0; ckBox[1] = 0; ckBox[2] = cs - 1; ckBox[3] = cs - 1;
+        T.crack = tex(cs, cs, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        clearCracks();
+        ckSig = NaN;
       }
       const es = Math.min(cs, EN_MAX);
       if (es !== enSize) { enSize = es; engravingsDirty = true; }
@@ -419,6 +417,8 @@ export function createRenderer(canvas, game) {
 
     // Cracks: rasterised on the CPU into a plate-space RGBA texture when they change.
     //   R hairline core (unhealed) · G gold in the crack · B lip height (0.5 = flat) · A gold glow
+    // Cracks only grow and gild, so only the reach of what changed is redrawn: a gold grain lodging
+    // costs one segment's neighbourhood, not the whole texture.
     function crackSignature(cracks) {
       let s = cracks.length * 1000.5;
       for (let i = 0; i < cracks.length; i++) {
@@ -430,83 +430,124 @@ export function createRenderer(canvas, game) {
       }
       return s;
     }
+    function clearCracks() {                            // the whole texture to 'no crack, flat'
+      const fb = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, T.crack, 0);
+      gl.clearColor(0, 0, 128 / 255, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.deleteFramebuffer(fb);
+      ckPrev = [];
+    }
+    // A crack's segments in texels: ends, width, gold, and how far their marks reach.
+    function crackSegs(c, ci) {
+      const pts = c && c.pts;
+      if (!Array.isArray(pts) || pts.length < 2) return null;
+      const S = ckSize, sc = S / 1024;
+      const branch = c.branchOf !== undefined && c.branchOf !== null;
+      const healed = !!c.healed;
+      let total = 0;
+      for (let i = 0; i < pts.length - 1; i++) total += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+      total = Math.max(total, 1e-6);
+      const wBase = (branch ? 0.8 : 1.15) * sc;
+      const segs = [];
+      let walked = 0, geo = 0;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const ax = (num(pts[i][0]) + 1) * 0.5 * S, ay = (num(pts[i][1]) + 1) * 0.5 * S;
+        const bx = (num(pts[i + 1][0]) + 1) * 0.5 * S, by = (num(pts[i + 1][1]) + 1) * 0.5 * S;
+        const segL = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+        const s01 = (walked + segL * 0.5) / total;
+        walked += segL;
+        // the crack opens widest where it started (the rim) and thins to nothing at its tip
+        const w = wBase * (0.35 + 0.85 * Math.pow(1 - s01, 0.7)) * (0.9 + 0.2 * Math.sin(walked * 40 + ci));
+        const gold = healed ? 1 : clamp01(num(c.gold?.[i]));
+        const reach = w * (healed ? 6 : 3.5) + 3;
+        const x0 = Math.max(0, Math.floor(Math.min(ax, bx) - reach)), x1 = Math.min(S - 1, Math.ceil(Math.max(ax, bx) + reach));
+        const y0 = Math.max(0, Math.floor(Math.min(ay, by) - reach)), y1 = Math.min(S - 1, Math.ceil(Math.max(ay, by) + reach));
+        segs.push({ ax, ay, bx, by, w, gold, healed, x0, y0, x1, y1 });
+        geo += (ax * 1.3 + ay * 0.7) * (i + 1);
+      }
+      return { segs, geo, healed, n: pts.length };
+    }
+    const grow = (r, x0, y0, x1, y1) => {
+      if (!r) return [x0, y0, x1, y1];
+      r[0] = Math.min(r[0], x0); r[1] = Math.min(r[1], y0); r[2] = Math.max(r[2], x1); r[3] = Math.max(r[3], y1);
+      return r;
+    };
     function updateCracks(t) {
       const cracks = game.state?.plate?.cracks;
       const list = Array.isArray(cracks) ? cracks : [];
       const sig = crackSignature(list);
       if (sig === ckSig) return;
-      // gilding creeps grain by grain: rebuild at most a few times a second unless the set changed
+      // gilding creeps grain by grain: redraw at most a few times a second unless the set changed
       const structural = Math.floor(sig / 1000.5) !== Math.floor(ckSig / 1000.5) || !Number.isFinite(ckSig);
       if (!structural && t - ckAt < 0.35) return;
       ckSig = sig; ckAt = t;
-      const bb = rasterCracks(list);
-      // cracks only ever grow or gild, so the region that changed lies inside today's bounds
-      const x0 = Math.min(bb[0], ckBox[0]), y0 = Math.min(bb[1], ckBox[1]);
-      const x1 = Math.max(bb[2], ckBox[2]), y1 = Math.max(bb[3], ckBox[3]);
-      ckBox[0] = bb[0]; ckBox[1] = bb[1]; ckBox[2] = bb[2]; ckBox[3] = bb[3];
-      if (x1 < x0 || y1 < y0) return;
-      gl.bindTexture(gl.TEXTURE_2D, T.crack);
-      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
-      gl.pixelStorei(gl.UNPACK_ROW_LENGTH, ckSize);
-      gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, x0);
-      gl.pixelStorei(gl.UNPACK_SKIP_ROWS, y0);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, x0, y0, x1 - x0 + 1, y1 - y0 + 1, gl.RGBA, gl.UNSIGNED_BYTE, ckBuf);
-      gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
-      gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
-      gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+      if (list.length < ckPrev.length) clearCracks();   // a plate that lost cracks (a new start): redraw all
+      const all = list.map((c, i) => crackSegs(c, i));
+      const rects = [];
+      for (let i = 0; i < all.length; i++) {
+        const cur = all[i], prev = ckPrev[i];
+        let r = null;
+        if (!cur) { if (prev) r = grow(r, ...prev.box); ckPrev[i] = null; }
+        else if (!prev || prev.n !== cur.n || prev.healed !== cur.healed || prev.geo !== cur.geo) {
+          // new, grown or healed: the whole crack, where it was and where it is
+          if (prev) r = grow(r, ...prev.box);
+          let box = null;
+          for (const g of cur.segs) box = grow(box, g.x0, g.y0, g.x1, g.y1);
+          r = grow(r, ...box);
+          ckPrev[i] = { n: cur.n, healed: cur.healed, geo: cur.geo, box, gold: cur.segs.map((g) => g.gold) };
+        } else {
+          // gilding: only the segments whose gold moved
+          for (let j = 0; j < cur.segs.length; j++) {
+            const g = cur.segs[j];
+            if (g.gold === prev.gold[j]) continue;
+            prev.gold[j] = g.gold;
+            r = grow(r, g.x0, g.y0, g.x1, g.y1);
+          }
+        }
+        if (r) rects.push(r);
+      }
+      for (const r of rects) rasterRect(all, r[0], r[1], r[2], r[3]);
     }
-    function rasterCracks(cracks) {
-      const S = ckSize, sc = S / 1024;
-      ckBuf.fill(0);
-      for (let q = 2; q < ckBuf.length; q += 4) ckBuf[q] = 128;      // B: flat
-      ckDist.fill(1e9);
-      let bx0 = S, by0 = S, bx1 = -1, by1 = -1;
-      for (let ci = 0; ci < cracks.length; ci++) {
-        const c = cracks[ci];
-        const pts = c && c.pts;
-        if (!pts || pts.length < 2) continue;
-        const branch = c.branchOf !== undefined && c.branchOf !== null;
-        const healed = !!c.healed;
-        let total = 0;
-        for (let i = 0; i < pts.length - 1; i++) total += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
-        total = Math.max(total, 1e-6);
-        const wBase = (branch ? 0.8 : 1.15) * sc;
-        let walked = 0;
-        for (let i = 0; i < pts.length - 1; i++) {
-          const ax = (pts[i][0] + 1) * 0.5 * S, ay = (pts[i][1] + 1) * 0.5 * S;
-          const bx = (pts[i + 1][0] + 1) * 0.5 * S, by = (pts[i + 1][1] + 1) * 0.5 * S;
-          const segL = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
-          const s01 = (walked + segL * 0.5) / total;
-          walked += segL;
-          // the crack opens widest where it started (the rim) and thins to nothing at its tip
-          const w = wBase * (0.35 + 0.85 * Math.pow(1 - s01, 0.7)) * (0.9 + 0.2 * Math.sin(walked * 40 + ci));
-          const gold = healed ? 1 : clamp01(num(c.gold?.[i]));
-          const reach = w * (healed ? 6 : 3.5) + 3;
-          const x0 = Math.max(0, Math.floor(Math.min(ax, bx) - reach)), x1 = Math.min(S - 1, Math.ceil(Math.max(ax, bx) + reach));
-          const y0 = Math.max(0, Math.floor(Math.min(ay, by) - reach)), y1 = Math.min(S - 1, Math.ceil(Math.max(ay, by) + reach));
-          if (x0 < bx0) bx0 = x0; if (y0 < by0) by0 = y0; if (x1 > bx1) bx1 = x1; if (y1 > by1) by1 = y1;
-          const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1e-9;
-          for (let y = y0; y <= y1; y++) {
+    // Rasterise every segment that reaches into [x0..x1]×[y0..y1] (texels) and upload that region.
+    function rasterRect(all, x0, y0, x1, y1) {
+      const S = ckSize;
+      const rw = x1 - x0 + 1, rh = y1 - y0 + 1, n = rw * rh;
+      if (!(rw > 0 && rh > 0)) return;
+      if (ckDist.length < n) {
+        ckDist = new Float32Array(n); ckW = new Float32Array(n); ckGold = new Float32Array(n);
+        ckHeal = new Uint8Array(n); ckBuf = new Uint8Array(n * 4);
+      }
+      ckDist.fill(1e9, 0, n);
+      for (const cs of all) {
+        if (!cs) continue;
+        for (const g of cs.segs) {
+          const sx0 = Math.max(x0, g.x0), sx1 = Math.min(x1, g.x1), sy0 = Math.max(y0, g.y0), sy1 = Math.min(y1, g.y1);
+          if (sx1 < sx0 || sy1 < sy0) continue;
+          const { ax, ay, w, gold } = g, hl = g.healed ? 1 : 0;
+          const dx = g.bx - ax, dy = g.by - ay, L2 = dx * dx + dy * dy || 1e-9;
+          for (let y = sy0; y <= sy1; y++) {
             const py = y + 0.5 - ay;
-            for (let x = x0; x <= x1; x++) {
+            for (let x = sx0; x <= sx1; x++) {
               const pxx = x + 0.5 - ax;
               let tt = (pxx * dx + py * dy) / L2;
               tt = tt < 0 ? 0 : tt > 1 ? 1 : tt;
               const ex = pxx - tt * dx, ey = py - tt * dy;
               const d = Math.sqrt(ex * ex + ey * ey);
-              const p = y * S + x;
+              const p = (y - y0) * rw + (x - x0);
               // a healed seam's glow wins over a neighbouring raw crack only where it is closer
-              if (d < ckDist[p]) { ckDist[p] = d; ckW[p] = w; ckGold[p] = gold; ckHeal[p] = healed ? 1 : 0; }
+              if (d < ckDist[p]) { ckDist[p] = d; ckW[p] = w; ckGold[p] = gold; ckHeal[p] = hl; }
             }
           }
         }
       }
-      if (bx1 < 0) { ckBB[0] = S; ckBB[1] = S; ckBB[2] = -1; ckBB[3] = -1; return ckBB; }
-      for (let y = by0; y <= by1; y++) {
-        for (let x = bx0; x <= bx1; x++) {
-          const p = y * S + x;
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const p = (y - y0) * rw + (x - x0), q = p * 4;
           const d = ckDist[p];
-          if (d >= 1e8) continue;
+          if (d >= 1e8) { ckBuf[q] = 0; ckBuf[q + 1] = 0; ckBuf[q + 2] = 128; ckBuf[q + 3] = 0; continue; }
           const w = ckW[p], g = ckGold[p], hl = ckHeal[p];
           // gold lodges grain by grain: a partly gilded crack glints in flecks
           const fleck = hl ? 1 : (((x * 73856093) ^ (y * 19349663)) >>> 0) % 997 / 997 < g * 1.15 ? 1 : 0.12;
@@ -516,15 +557,15 @@ export function createRenderer(canvas, game) {
           const groove = (hl ? 0.2 : 0.75) * Math.exp(-((d / (w * 0.85)) ** 2));
           const hgt = 0.5 + 0.5 * (lip - groove);
           const glow = hl ? Math.exp(-((d / (w * 3.2)) ** 2)) : g * fleck * 0.2 * Math.exp(-((d / (w * 1.8)) ** 2));
-          const q = p * 4;
           ckBuf[q] = Math.round(clamp01(core) * 255);
           ckBuf[q + 1] = Math.round(clamp01(fill) * 255);
           ckBuf[q + 2] = Math.round(clamp01(hgt) * 255);
           ckBuf[q + 3] = Math.round(clamp01(glow) * 255);
         }
       }
-      ckBB[0] = bx0; ckBB[1] = by0; ckBB[2] = bx1; ckBB[3] = by1;
-      return ckBB;
+      gl.bindTexture(gl.TEXTURE_2D, T.crack);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, x0, y0, rw, rh, gl.RGBA, gl.UNSIGNED_BYTE, ckBuf.subarray(0, n * 4));
     }
 
     // Engravings: the keeper's phosphor marks (R) and her last message (G); the shader takes their
