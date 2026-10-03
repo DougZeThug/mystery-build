@@ -7,7 +7,7 @@ import { newState } from '../src/core/persist.js';
 import { createField } from '../src/sim/field.js';
 import { createSand } from '../src/sim/sand.js';
 import { createLife, TUNE, STATE_CODE, FLAG, KEEPER_ID } from '../src/sim/life.js';
-import { nameFor, noteFor, speciesRatioText, NOTE_COUNT, colourFor, KEEPER } from '../src/sim/naming.js';
+import { nameFor, noteFor, speciesRatioText, NOTE_COUNT, colourFor, KEEPER, numberWord as numberWordOf } from '../src/sim/naming.js';
 import { MODES, modeById, evalMode } from '../src/sim/modes.js';
 
 function makeGame(seed = 5, state = newState(), grains = 9000) {
@@ -142,7 +142,7 @@ test('old age crumbles into sand and gold (flag 128 while dying); only a throw g
   ev.off(); g.life.destroy();
 });
 
-test('first births are quick: a steady figure at amp .45 quickens within 8-14 s; later ones keep their pace', () => {
+test('first births are quick (the first three kinds): a steady figure at amp .45 quickens within 7-14 s; later ones keep their pace', () => {
   for (const amp of [0.45, 0.8]) {
     const ev = listen(['mote:birth']);
     const g = makeGame(31, newState(), 20000);
@@ -154,17 +154,105 @@ test('first births are quick: a steady figure at amp .45 quickens within 8-14 s;
     assert.ok(times.length >= 4, `amp ${amp}: only ${times.length} births in 30 s`);
     assert.ok(times[0] >= 7 && times[0] <= 14, `amp ${amp}: first birth at ${times[0].toFixed(1)} s`);
     assert.ok(times[2] <= 22, `amp ${amp}: third birth at ${times[2].toFixed(1)} s`);
-    // after the third, a familiar kind quickens at its ordinary pace (about 3.4 s apart at .8)
+    // and then never crowd in on one another (the quickening each birth spends)
     for (let i = 3; i < times.length; i++) assert.ok(times[i] - times[i - 1] >= 2.9, `amp ${amp}: births ${i} and ${i + 1} only ${(times[i] - times[i - 1]).toFixed(1)} s apart`);
   }
-  // an experienced plate (three births already) keeps the old, slower gestation
-  const st = newState(); st.stats.births = 3;
-  st.species['1.2+'] = { id: '1.2+', name: 'x' }; st.species['1.3+'] = { id: '1.3+', name: 'y' }; st.species['2.3+'] = { id: '2.3+', name: 'z' };
+  // the eager phase follows the kinds known, not the births: with three kinds known, a new form
+  // takes longer (driveGestation), but still comes within 10-20 s of steady bowing, soft or loud
+  for (const amp of [0.36, 0.8]) {
+    const st = newState(); st.stats.births = 40;
+    st.species['1.2+'] = { id: '1.2+', name: 'x' }; st.species['1.3+'] = { id: '1.3+', name: 'y' }; st.species['2.3+'] = { id: '2.3+', name: 'z' };
+    const g = makeGame(31, st, 20000);
+    let t = 0, first = null;
+    const off = bus.on('mote:birth', () => { if (first === null) first = t; });
+    while (t < 22 && first === null) { step(g, 0.1, '2.5-', amp); t += 0.1; }
+    off(); g.life.destroy();
+    assert.ok(first !== null && first >= 9 && first <= 20, `amp ${amp}: a new form on an experienced plate at ${first?.toFixed(1)} s`);
+  }
+});
+
+// a populous plate whose chorus is loud: thirty singers of the octave clan, well fed
+function choirPlate(seed) {
+  const g = makeGame(seed, newState(), 20000);
+  const kinds = [['1.3+'], ['2.4+'], ['1.3+', '2.4+'], ['2.6+']];
+  for (let i = 0; i < 30; i++) {
+    const a = i * 2.39996, r = 0.3 + 0.45 * ((i * 0.618) % 1);
+    g.life.spawn(kinds[i % kinds.length], Math.cos(a) * r, Math.sin(a) * r, 0.85, { silent: true });
+  }
+  step(g, 12);
+  return g;
+}
+function firstBirthOf(g, id, secs, drive) {
+  let t = 0, at = null;
+  const off = bus.on('mote:birth', (e) => { if (at === null && e.species.id === id) at = t; });
+  const dt = 1 / 30;
+  while (t < secs && at === null) {
+    drive(t);
+    g.field.setSource('chorus', g.life.chorus());
+    g.field.update(dt); g.sand.update(dt); g.life.update(dt);
+    g.t += dt; t += dt;
+  }
+  off();
+  return at;
+}
+
+test('the played note wins the plate: a soft k=5 stroke under a loud chorus quickens its kind in mid-game', () => {
+  const g = choirPlate(41);
+  let c2 = 0;
+  for (const c of g.life.chorus()) c2 += c.amp * c.amp;
+  assert.ok(Math.sqrt(c2) > 0.5, `the chorus is not loud (${Math.sqrt(c2).toFixed(2)})`);
+  // 0.36 is about the most a stroke slow enough to pick k=5 can give
+  const at = firstBirthOf(g, '1.2+', 30, () => g.field.setSource('bow', [{ mode: '1.2+', amp: 0.36 }]));
+  g.life.destroy();
+  assert.ok(at !== null && at <= 24, `k=5 under a loud chorus: ${at === null ? 'never' : at.toFixed(1) + ' s'}`);
+});
+
+test('a touched tuning fork quickens its exact mode at an early pace (the forks reach the 5·10·20·40 chain)', () => {
+  for (const [seed, crowd] of [[42, false], [43, true]]) {
+    const g = crowd ? choirPlate(seed) : makeGame(seed, newState(), 20000);
+    if (!crowd) for (const id of ['2.3+', '3.4+', '2.5-']) g.state.species[id] = { id, name: id };   // an experienced plate
+    // struck, carried over, touched: .7 fading over 12 s; struck again a moment after it falls quiet
+    const fork = (t) => { const age = t % 13.5; g.field.setSource('fork', age < 12 ? [{ mode: '1.2+', amp: 0.7 * Math.pow(1 - age / 12, 1.3) }] : []); };
+    const at = firstBirthOf(g, '1.2+', 30, fork);
+    g.life.destroy();
+    // one fresh touch on a sparse plate; on a crowded one, the second
+    assert.ok(at !== null && at <= (crowd ? 27 : 12), `fork, ${crowd ? 'crowded' : 'sparse'} plate: ${at === null ? 'never' : at.toFixed(1) + ' s'}`);
+  }
+});
+
+test('quickening is kept per mode: wandering to a neighbour and back loses little', () => {
+  const st = newState();
+  for (const id of ['1.2+', '1.3+', '2.3+']) st.species[id] = { id, name: id };
+  const g = makeGame(44, st, 20000);
+  step(g, 8, '2.5-', 0.8);
+  const q0 = g.life.quickening;
+  assert.ok(q0 > 0.3 && q0 < 1, `quickening after 8 s: ${q0.toFixed(2)}`);
+  step(g, 3, '2.5+', 0.8);                     // its mirror for a moment (a different figure)
+  const blob = JSON.parse(JSON.stringify(g.life.serialize()));
+  assert.ok(Array.isArray(blob.qs) && blob.qs.some(([id, q]) => id === '2.5-' && q > q0 - 0.2), 'per-mode quickening not saved');
   const ev = listen(['mote:birth']);
-  const g = makeGame(31, st, 20000);
-  step(g, 18, '2.5-', 0.8);
+  step(g, 3.5, '2.5-', 0.8);                   // and back: it picks up where it left off
   ev.off(); g.life.destroy();
-  assert.equal(ev.seen['mote:birth'].length, 0, 'late births should not be hurried');
+  assert.ok(ev.seen['mote:birth'].some((e) => e.species.id === '2.5-'), 'progress on 2.5- was thrown away');
+});
+
+test('the phonograph brings back a vanished hybrid, chord and all', () => {
+  const g = makeGame(45, newState(), 20000);
+  const a = g.life.spawn(['1.3+', '2.4+'], 0.4, 0.4, 0.8, { silent: true });
+  step(g, 0.5);
+  a.age = a.life;                              // it dies of old age; its kind is gone
+  step(g, 3);
+  const rec = g.state.species['1.3+|2.4+'];
+  assert.ok(rec && rec.extinct, 'the hybrid did not go extinct');
+  for (const id of ['1.2+', '2.3+', '3.4+']) g.state.species[id] ||= { id, name: id };
+  // a cylinder of it: both voices, softly, one a little louder than the other
+  const ev = listen(['mote:birth']);
+  const at = firstBirthOf(g, '1.3+|2.4+', 20, () => g.field.setSource('phono', [{ mode: '1.3+', amp: 0.3 }, { mode: '2.4+', amp: 0.24 }]));
+  ev.off(); g.life.destroy();
+  assert.ok(at !== null && at <= 12, `hybrid revival: ${at === null ? 'never' : at.toFixed(1) + ' s'}`);
+  assert.equal(ev.seen['mote:birth'][0].species.id, '1.3+|2.4+', 'the cylinder birthed a single voice, not the chord');
+  assert.equal(rec.extinct, false);
+  assert.equal(rec.stats.returns, 1);
 });
 
 // a point near the rim where a mode is loudest (a strong antinode)
@@ -506,6 +594,68 @@ test('resting finger gathers singers', () => {
   assert.ok(near >= 3, `only ${near} came to the finger`);
   assert.ok(g.life.motes.some((m) => m.state === 'nestle'));
   g.life.destroy();
+});
+
+test('simulateOffline on a slow device: the whole absence is lived, coarsely; nobody is wiped out; counts and tallies agree', () => {
+  const budget = TUNE.offlineBudget;
+  try {
+    for (const seed of [21, 22]) {
+      TUNE.offlineBudget = 0.01;                 // as if the device could spare no time at all
+      const g = makeGame(seed);
+      const ids = ['1.2+', '1.3-', '2.4+', '1.2-'];
+      for (let i = 0; i < 24; i++) g.life.spawn([ids[i % 4]], -0.7 + (i % 6) * 0.28, -0.6 + Math.floor(i / 6) * 0.35, 0.8, { silent: true });
+      step(g, 20);
+      // one crumbling, one being swallowed as the plate is left
+      const ms = g.life.motes.filter((m) => !m.keeper);
+      ms[0].age = ms[0].life; step(g, 1 / 30);
+      assert.equal(ms[0].state, 'die');
+      const stats0 = { ...g.state.stats };
+      const leaving = g.life.motes.filter((m) => !m.keeper && m.state !== 'die').length;
+      const notes = g.life.simulateOffline(3 * 3600);
+      const living = g.life.motes.filter((m) => !m.dead && !m.keeper);
+      assert.ok(living.length >= 8, `seed ${seed}: ${living.length} survived three hours`);
+      assert.equal(g.life.motes.filter((m) => m.dead).length, 0, 'dead singers left in the list');
+      assert.ok(g.life.motes.every((m) => m.state === 'walk' && finite(m)));
+      for (const r of Object.values(g.state.species)) {
+        const n = living.filter((m) => m.sp === r.id).length;
+        assert.equal(r.count, n, `${r.id} count`);
+        assert.equal(r.extinct, n === 0, `${r.id} extinct flag`);
+      }
+      const words = notes.map((n) => n.text).join(' ');
+      assert.ok(words.includes(`numbered ${numberWordOf(leaving)} when you left`) || words.includes('unchanged'), words);
+      assert.ok(!/None remain/.test(words), words);
+      // the room's tallies include what happened while it was empty
+      assert.ok(g.state.stats.deaths > stats0.deaths + 20 && g.state.stats.splits > stats0.splits + 20, JSON.stringify(g.state.stats));
+      assert.ok(g.state.stats.maxPop >= living.length);
+      assert.equal(g.state.seen.firstGold, true);
+      g.life.destroy();
+    }
+  } finally { TUNE.offlineBudget = budget; }
+});
+
+test('a kind whose last singer was crumbling as the plate was saved is extinct after reloading', () => {
+  const g = makeGame(23);
+  const m = g.life.spawn(['2.5-'], 0.4, 0.4, 0.8, { silent: true });
+  g.life.spawn(['1.3+'], -0.4, 0.4, 0.8, { silent: true });
+  step(g, 1);
+  m.age = m.life; step(g, 0.1);
+  assert.equal(m.state, 'die');
+  assert.equal(g.state.species['2.5-'].extinct, false);
+  const blob = JSON.parse(JSON.stringify(g.life.serialize()));
+  g.life.destroy();
+  const g2 = makeGame(23, g.state);
+  g2.life.deserialize(blob);
+  const r = g.state.species['2.5-'];
+  assert.equal(r.count, 0);
+  assert.equal(r.extinct, true);
+  assert.ok(r.extinctAt > 0);
+  assert.equal(g.state.species['1.3+'].extinct, false);
+  // one damaged singer costs only itself
+  const blob2 = JSON.parse(JSON.stringify(g2.life.serialize()));
+  blob2.motes.unshift(42);
+  g2.life.deserialize(blob2);
+  assert.equal(g2.life.motes.length, 1);
+  g2.life.destroy();
 });
 
 test('simulateOffline: quick, sane, and writes field notes', () => {
