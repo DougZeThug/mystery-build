@@ -22,6 +22,7 @@ const DUST_N = 150;
 const MAX_SINGERS = 64;
 const MIN_SINGER_PX = 9;      // singers are drawn no smaller than about this radius (CSS px)
 const BIRTH_SECS = 5;         // how long a birth's light lasts (see birthGlow in shaders.js)
+const EN_MAX = 2048;          // engraving texture size cap
 
 // Canonical singer state codes and flag bits as the shaders read them. life.js owns the real
 // encoding (STATES / FLAG); instance data is remapped to these names every frame, so a reordered
@@ -55,7 +56,7 @@ export function createRenderer(canvas, game) {
       premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
   } catch { gl = null; }
 
-  const engr = { lines: null, floor: null, fontReady: false };
+  const engr = { lines: null, floor: null, fontReady: false, fontAskedAt: -1, baked: false, bakedFallback: false };
   const api = {
     kind: 'webgl2',
     resize() {}, render() {},
@@ -111,7 +112,7 @@ export function createRenderer(canvas, game) {
     const ckBox = [0, 0, -1, -1], ckBB = [0, 0, -1, -1];
     let ckSig = NaN, ckAt = -1, ckBuf = null, ckDist = null, ckW = null, ckGold = null, ckHeal = null;
     let engrOn = 0, floorEngr = 0, lastT = 0, phonoK = 0;
-    let fontsAsked = false, keeperSig = '', keeperAt = -10;
+    let keeperSig = '', keeperAt = -10, unhide = false;
     // singer instances, remapped to the canonical codes (see CANON_STATES / CANON_FLAGS)
     let instLocal = new Float32Array(MAX_SINGERS * 16);
     let birthLocal = new Float32Array(MAX_SINGERS);
@@ -228,8 +229,9 @@ export function createRenderer(canvas, game) {
       T.field = tex(1, 1, gl.R16F, gl.RED, gl.FLOAT, new Float32Array(1));
       T.sand = tex(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
       T.wear = tex(game.WEAR || 128, game.WEAR || 128, gl.R8, gl.RED, gl.UNSIGNED_BYTE, null);
-      T.felt = null; T.matA = null; T.matB = null; T.crack = null; T.engr = null;
-      fieldVer = -1; fieldG = 0; sandVer = -1; sandD = 0; wearVer = -1; ckSig = NaN; engravingsDirty = true;
+      T.felt = null; T.matA = null; T.matB = null; T.crack = null;
+      T.engr = tex(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));   // baked when first needed
+      fieldVer = -1; fieldG = 0; sandVer = -1; sandD = 0; wearVer = -1; ckSig = NaN; engravingsDirty = true; engr.baked = false;
       W = 0; H = 0; sceneW = 0; sceneH = 0; matSize = 0; ckSize = 0; enSize = 0;
 
       R.lm = target(LM_SIZE, LM_SIZE, hdrFmt);
@@ -376,7 +378,8 @@ export function createRenderer(canvas, game) {
         T.crack = tex(cs, cs, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, ckBuf);
         ckSig = NaN; ckBox[0] = 0; ckBox[1] = 0; ckBox[2] = cs - 1; ckBox[3] = cs - 1;
       }
-      if (cs !== enSize) { enSize = cs; engravingsDirty = true; }
+      const es = Math.min(cs, EN_MAX);
+      if (es !== enSize) { enSize = es; engravingsDirty = true; }
     }
 
     // ---- dynamic uploads ------------------------------------------------------------------------
@@ -524,8 +527,10 @@ export function createRenderer(canvas, game) {
       return ckBB;
     }
 
-    // Engravings: the keeper's phosphor marks (R sharp, G soft) and her last message (B sharp, A soft).
-    function updateEngravings(t) {
+    // Engravings: the keeper's phosphor marks (R) and her last message (G); the shader takes their
+    // soft glow from the mip chain. Baked only once they are wanted (darkness, the Floor) and once
+    // the font has loaded, never during the fade-in; Canvas2D straight to the texture, no readback.
+    function updateEngravings(t, want) {
       // the notebook module may fill its texts after we start: look again now and then
       if (t - keeperAt > 2) {
         keeperAt = t;
@@ -533,18 +538,27 @@ export function createRenderer(canvas, game) {
         const sig = `${Array.isArray(e) ? e.length : typeof e}:${Array.isArray(f) ? f.length : typeof f}:${(e && e[0]) || ''}`;
         if (sig !== keeperSig) { keeperSig = sig; engravingsDirty = true; }
       }
-      if (!engravingsDirty) return;
+      if (engr.fontAskedAt < 0) {                       // ask early, so the font is there when wanted
+        engr.fontAskedAt = performance.now();
+        if (document.fonts?.load) {
+          Promise.all([document.fonts.load('48px "IM Fell English"'), document.fonts.load('italic 48px "IM Fell English"')])
+            .then(() => { engr.fontReady = true; if (engr.bakedFallback) engravingsDirty = true; }, () => { engr.fontReady = true; });
+        } else engr.fontReady = true;
+      }
+      if (!want || !engravingsDirty) return;
+      // a font that is slow to arrive: carve with the fallback now, and again once it is here
+      if (!engr.fontReady && performance.now() - engr.fontAskedAt < 4000) return;
       engravingsDirty = false;
       const lines = toLines(engr.lines ?? keeper.ENGRAVINGS);
       const floor = toLines(engr.floor ?? keeper.FLOOR_ENGRAVING);
-      if (!fontsAsked && document.fonts?.load && (lines.length || floor.length)) {
-        fontsAsked = true;
-        Promise.all([document.fonts.load('48px "IM Fell English"'), document.fonts.load('italic 48px "IM Fell English"')])
-          .then(() => { engr.fontReady = true; engravingsDirty = true; }).catch(() => {});
-      }
-      const data = drawEngravings(enSize, lines, floor);
+      const art = drawEngravings(enSize, lines, floor);
+      if (!art) return;
       if (T.engr) gl.deleteTexture(T.engr);
-      T.engr = tex(enSize, enSize, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, data);
+      gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+      T.engr = tex(enSize, enSize, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, art, { filter: gl.LINEAR_MIPMAP_LINEAR });
+      gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.BROWSER_DEFAULT_WEBGL);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      engr.baked = true; engr.bakedFallback = !engr.fontReady;
     }
 
     // ---- births ---------------------------------------------------------------------------------
@@ -593,11 +607,14 @@ export function createRenderer(canvas, game) {
       adapt(t0);
       const timing = timerBegin();
       try { drawFrame(v, t0); } finally { if (timing) gl.endQuery(tq.TIME_ELAPSED_EXT); }
+      if (unhide) { unhide = false; canvas.style.visibility = ''; }
     }
 
     function drawFrame(v, t0) {
       const t = num(game.t), dt = Math.min(0.1, Math.max(0, t - lastT));
       lastT = t;
+      // the shaders' clocks (see TIME_WRAP in shaders.js): wrapped here, in double precision
+      const tw = t % SH.TIME_WRAP, ts = t % SH.TIME_WRAP_SLOW;
       const Lt = game.light || {}, fx = game.fx || {};
       const level = clamp01(num(Lt.level, 1));
       const flick = clamp01(num(Lt.flicker));
@@ -647,7 +664,8 @@ export function createRenderer(canvas, game) {
       if (info.frames === 0) { engrOn = dark; floorEngr = floorTarget; phonoK = phOn; }
       const engrVis = engrOn * (1 - level) * (1 - level);
 
-      uploadField(); uploadSand(); uploadWear(); updateCracks(t); updateEngravings(t);
+      uploadField(); uploadSand(); uploadWear(); updateCracks(t);
+      updateEngravings(t, engrOn > 0.001 || floorEngr > 0.001 || floorTarget > 0);
 
       // singers
       let count = 0;
@@ -680,7 +698,7 @@ export function createRenderer(canvas, game) {
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.ONE, gl.ONE);
         gl.useProgram(Ps.p);
-        singerUniforms(Ps, cx, cy, unit, lx, ly, lz, t, dpr * sceneW / W, level, choir);
+        singerUniforms(Ps, cx, cy, unit, lx, ly, lz, tw, dpr * sceneW / W, level, choir);
         gl.uniform1i(Ps.u.uPass, 2);
         gl.bindVertexArray(vaoSing);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
@@ -699,7 +717,7 @@ export function createRenderer(canvas, game) {
       gl.uniform1f(Pc.u.uPoolR, poolR);
       gl.uniform1f(Pc.u.uLightI, lightI);
       gl.uniform1f(Pc.u.uLevel, level);
-      gl.uniform1f(Pc.u.uTime, t);
+      gl.uniform1f(Pc.u.uTime, tw);
       gl.uniform1f(Pc.u.uAmp, num(f?.total));
       gl.uniform1f(Pc.u.uK, num(f?.kEff, 20));
       gl.uniform1f(Pc.u.uChoir, choir);
@@ -726,7 +744,7 @@ export function createRenderer(canvas, game) {
       gl.enable(gl.BLEND);
       if (count > 0) {
         gl.useProgram(Ps.p);
-        singerUniforms(Ps, cx, cy, unit, lx, ly, lz, t, sdpr, level, choir);
+        singerUniforms(Ps, cx, cy, unit, lx, ly, lz, tw, sdpr, level, choir);
         gl.bindVertexArray(vaoSing);
         gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
         gl.uniform1i(Ps.u.uPass, 0);
@@ -744,7 +762,7 @@ export function createRenderer(canvas, game) {
         gl.uniform1f(Pd.u.uDpr, sdpr);
         gl.uniform3f(Pd.u.uLamp, ax, ay, lz);
         gl.uniform1f(Pd.u.uPoolR, size * 0.72);
-        gl.uniform1f(Pd.u.uTime, t);
+        gl.uniform1f(Pd.u.uTimeS, ts);
         gl.uniform1f(Pd.u.uLightI, lightI * (1 + 0.6 * choir));
         gl.bindVertexArray(vaoEmpty);
         gl.drawArrays(gl.POINTS, 0, DUST_N);
@@ -772,7 +790,9 @@ export function createRenderer(canvas, game) {
       gl.useProgram(Pq.p);
       gl.uniform2f(Pq.u.uRes, W, H);
       gl.uniform1f(Pq.u.uDpr, dpr);
-      gl.uniform1f(Pq.u.uTime, t);
+      gl.uniform1f(Pq.u.uTime, tw);
+      gl.uniform1f(Pq.u.uTimeS, ts);
+      gl.uniform1f(Pq.u.uGrain, Math.floor(t * 24) % 1024);
       gl.uniform3f(Pq.u.uLamp, lx, ly, lz);
       gl.uniform1f(Pq.u.uPoolR, poolR);
       gl.uniform1f(Pq.u.uLightI, lightI);
@@ -886,12 +906,14 @@ export function createRenderer(canvas, game) {
       gl.uniform1f(Ps.u.uMinR, MIN_SINGER_PX / Math.max(1, unit));
     }
 
-    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); lost = true; });
+    // While the context is lost the browser paints its own placeholder over the canvas (a white
+    // 'sad canvas' in Chrome): hide it, so the dark room stays dark until the first frame is back.
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); lost = true; canvas.style.visibility = 'hidden'; });
     canvas.addEventListener('webglcontextrestored', () => {
       // everything from the old context is gone: forget it rather than delete it
       for (const k of Object.keys(T)) T[k] = null;
       for (const k of Object.keys(R)) R[k] = null;
-      try { init(); } catch (err) { console.error('[gfx] restore failed', err); }
+      try { init(); unhide = true; } catch (err) { console.error('[gfx] restore failed', err); }
     });
 
     init();
@@ -901,43 +923,30 @@ export function createRenderer(canvas, game) {
     api.render = () => { try { render(); } catch (e) { reportOnce(e); } };
   }
 
-  // ---- engraving artwork (Canvas2D, then packed into one RGBA texture) -----------------------
+  // ---- engraving artwork (Canvas2D: marks in red, the last message in green) -----------------
   function drawEngravings(S, lines, floor) {
-    const out = new Uint8Array(S * S * 4);
     const doc = typeof document !== 'undefined' ? document : null;
-    if (!doc) return out;
-    const a = paintLayer(S, (ctx) => paintMarks(ctx, S, lines), 6);
-    const b = floor.length ? paintLayer(S, (ctx) => paintFloor(ctx, S, floor), 2) : null;
-    const pa = a.sharp, qa = a.soft, pb = b?.sharp, qb = b?.soft;
-    for (let p = 0, q = 0; p < S * S; p++, q += 4) {
-      out[q] = pa[q];
-      out[q + 1] = qa[q];
-      out[q + 2] = pb ? pb[q] : 0;
-      out[q + 3] = pb ? qb[q] : 0;
-    }
+    if (!doc) return null;
+    const out = doc.createElement('canvas');
+    out.width = out.height = S;
+    const o = out.getContext('2d');
+    o.fillStyle = '#000'; o.fillRect(0, 0, S, S);
+    o.globalCompositeOperation = 'lighter';
+    const layer = doc.createElement('canvas');
+    layer.width = layer.height = S;
+    const ctx = layer.getContext('2d');
+    const paintInto = (paint, tint) => {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, S, S);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.save(); paint(ctx); ctx.restore();
+      ctx.globalCompositeOperation = 'multiply';           // white marks -> one channel
+      ctx.fillStyle = tint; ctx.fillRect(0, 0, S, S);
+      o.drawImage(layer, 0, 0);
+    };
+    if (lines.length) paintInto((c) => paintMarks(c, S, lines), '#f00');
+    if (floor.length) paintInto((c) => paintFloor(c, S, floor), '#0f0');
     return out;
-  }
-
-  function paintLayer(S, paint, k) {
-    const c = document.createElement('canvas');
-    c.width = c.height = S;
-    const ctx = c.getContext('2d', { willReadFrequently: true });
-    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, S, S);
-    ctx.globalCompositeOperation = 'lighter';
-    paint(ctx);
-    ctx.globalCompositeOperation = 'source-over';
-    const sharp = ctx.getImageData(0, 0, S, S).data;
-    // a soft copy (cheap blur: down by k and up again)
-    const s = document.createElement('canvas');
-    s.width = s.height = Math.max(8, S / k | 0);
-    const sx = s.getContext('2d');
-    sx.imageSmoothingEnabled = true;
-    sx.drawImage(c, 0, 0, s.width, s.height);
-    ctx.imageSmoothingEnabled = true;
-    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, S, S);
-    ctx.drawImage(s, 0, 0, S, S);
-    const soft = ctx.getImageData(0, 0, S, S).data;
-    return { sharp, soft };
   }
 
   // tiny seeded rng for hand-cut jitter (deterministic per text)

@@ -7,6 +7,14 @@
 // The scene is lit in linear light; the composite pass tonemaps and encodes to sRGB.
 import { GLSL_MODE } from '../sim/modes.js';
 
+// Time as the shaders see it. Raw seconds lose their fraction in float32 after hours (the grain
+// turns into a grid, fast shimmers into noise), so uTime is wrapped on 200π s: every sin(ω t)
+// with ω a multiple of 0.01 rad/s (every rate used here) runs on across the wrap without a seam;
+// what does jump is a hash seed or noise sample, which nobody can see. Slow non-periodic drifts
+// (dust, the beam's shafts) take uTimeS, wrapped once a day; the grain takes its own seed.
+export const TIME_WRAP = 200 * Math.PI;
+export const TIME_WRAP_SLOW = 86400;
+
 const HEAD = `#version 300 es
 precision highp float;
 precision highp int;
@@ -319,7 +327,13 @@ void main() {
     float din = -dEdge;
     vec4 mA = textureGrad(tMatA, uvP, gdx, gdy);
     vec4 mB = textureGrad(tMatB, uvP, gdx, gdy);
-    vec4 en = T0(tEngr, uvP);
+    // engravings (texture R the keeper's marks, G her last message; the soft glow of each from the
+    // mips, about 1/6 and 1/2 of full resolution): en = sharp marks, soft marks, sharp message, soft message
+    vec4 en = vec4(0.0);
+    if (uEngr > 0.002 || uFloorEngr > 0.0) {
+      vec2 sharp = T0(tEngr, uvP).rg;
+      en = vec4(sharp.r, textureLod(tEngr, uvP, 2.6).r, sharp.g, textureLod(tEngr, uvP, 1.0).g);
+    }
     vec4 ck = T0(tCrack, uvP);
     vec4 sd = T0(tSand, uvP);
     float bw = max(2.2, unit * 0.013);
@@ -402,8 +416,8 @@ void main() {
     // engravings: grooves (the last message, once revealed) and the phosphor marks
     if (uFloorEngr > 0.0) {
       // a V-cut groove: walls from the gradient of the softened letterforms
-      float ex = T0(tEngr, uvP + vec2(uEnTexel.x, 0.0)).a - T0(tEngr, uvP - vec2(uEnTexel.x, 0.0)).a;
-      float ey = T0(tEngr, uvP + vec2(0.0, uEnTexel.y)).a - T0(tEngr, uvP - vec2(0.0, uEnTexel.y)).a;
+      float ex = textureLod(tEngr, uvP + vec2(uEnTexel.x, 0.0), 1.0).g - textureLod(tEngr, uvP - vec2(uEnTexel.x, 0.0), 1.0).g;
+      float ey = textureLod(tEngr, uvP + vec2(0.0, uEnTexel.y), 1.0).g - textureLod(tEngr, uvP - vec2(0.0, uEnTexel.y), 1.0).g;
       N.xy += vec2(ex, ey) * 1.4 * uFloorEngr;
       cav *= 1.0 - 0.45 * en.b * uFloorEngr;
     }
@@ -872,7 +886,7 @@ void main() {
     col += GOLD * (1.0 - smoothstep(0.0, vw + 0.07, vn)) * body * 0.9 * inten;
   }
   if (nst > 0.5) {                                                          // purr
-    float pr = fract(uTime * 0.45 + phase);
+    float pr = fract(uTime * (283.0 / ${TIME_WRAP.toFixed(7)}) + phase);   // ~0.45 Hz, whole turns per wrap
     col += cAvg * exp(-pow((d - 1.15 - 0.9 * pr) * 7.0, 2.0)) * (1.0 - pr) * 0.18 * inten;
   }
   if (fls > 0.5 || (code > 2.5 && code < 3.5)) {                            // fusion flash
@@ -922,7 +936,7 @@ uniform vec2 uRes;
 uniform float uDpr;
 uniform vec3 uLamp;
 uniform float uPoolR;
-uniform float uTime;
+uniform float uTimeS;      // slow time: the motes drift for hours without a seam
 uniform float uLightI;
 out float vA;
 out float vSoft;
@@ -933,15 +947,15 @@ void main() {
   float rad = sqrt(h(id * 2.17)) * 1.25;
   vec2 base = vec2(cos(a), sin(a)) * rad * uPoolR;
   float sp = 0.006 + 0.012 * h(id * 3.7);
-  vec2 drift = vec2(sin(uTime * sp * 6.0 + id), cos(uTime * sp * 4.7 + id * 1.7)) * uPoolR * 0.08;
-  drift += vec2(uTime * sp * 3.0, -uTime * sp * 1.6) * uPoolR * 0.25;
+  vec2 drift = vec2(sin(uTimeS * sp * 6.0 + id), cos(uTimeS * sp * 4.7 + id * 1.7)) * uPoolR * 0.08;
+  drift += vec2(uTimeS * sp * 3.0, -uTimeS * sp * 1.6) * uPoolR * 0.25;
   vec2 p = base + drift;
   vec2 box = vec2(uPoolR * 2.6);
   p = mod(p + box * 0.5, box) - box * 0.5;
   vec2 css = uLamp.xy + p;
   float r = length(p) / uPoolR;
   float lit = pow(max(0.0, 1.0 - smoothstep(0.2, 1.05, r)), 2.0) * uLightI;
-  float flake = pow(0.5 + 0.5 * sin(uTime * (0.7 + 1.9 * h(id * 5.3)) + id * 3.1), 5.0);
+  float flake = pow(0.5 + 0.5 * sin(uTimeS * (0.7 + 1.9 * h(id * 5.3)) + id * 3.1), 5.0);
   float bokeh = step(0.86, h(id * 7.7));
   vSoft = bokeh;
   vA = lit * (0.2 + 0.8 * flake) * mix(1.1, 0.16, bokeh);
@@ -1012,6 +1026,8 @@ uniform sampler2D tScene, tBloomA, tBloomB;
 uniform vec2 uRes;
 uniform float uDpr;
 uniform float uTime;
+uniform float uTimeS;      // slow time (see TIME_WRAP_SLOW)
+uniform float uGrain;      // grain seed: frame of a 24 fps film, wrapped on 1024
 uniform vec3 uLamp;
 uniform float uPoolR;
 uniform float uLightI;
@@ -1051,7 +1067,7 @@ void main() {
   float r = length(d) / uPoolR;
   float ra = length(css - uAim) / uPlateW;
   vec2 dirv = d / max(length(d), 1e-3);
-  float ang = vnoise(dirv * 9.0 + vec2(uTime * 0.021, -uTime * 0.017)) * 0.55 + vnoise(dirv * 23.0 - vec2(uTime * 0.035, uTime * 0.012)) * 0.45;
+  float ang = vnoise(dirv * 9.0 + vec2(uTimeS * 0.021, -uTimeS * 0.017)) * 0.55 + vnoise(dirv * 23.0 - vec2(uTimeS * 0.035, uTimeS * 0.012)) * 0.45;
   float rays = smoothstep(0.5, 0.95, ang) * exp(-r * 1.8) * smoothstep(0.05, 0.45, r);
   float haze = exp(-ra * ra * 3.2);
   c += vec3(1.0, 0.84, 0.62) * uLightI * (rays * (0.005 + 0.028 * uChoir) + haze * (0.005 + 0.018 * uChoir));
@@ -1072,7 +1088,7 @@ void main() {
 
   // phonograph playback: the room remembers itself like an old film. A faint sepia cast, the
   // projector's uneven flicker, a lifted black and coarser grain. Barely there.
-  float gseed = floor(uTime * 24.0);
+  float gseed = uGrain;
   if (uPhono > 0.001) {
     float fl = vnoise1(uTime * 15.0) * 0.6 + vnoise1(uTime * 41.0 + 7.0) * 0.4;
     float lum = dot(c, vec3(0.299, 0.587, 0.114));
