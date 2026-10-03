@@ -226,8 +226,13 @@ export function createTools(game) {
     p.type = (e && e.pointerType) || 'mouse'; p.moved = false; p.hold = false; p.kind = null;
     if (e && e.button > 0) { freePtr(p); return false; }
 
-    // the open tray is on top of everything
+    // the open tray is on top of everything; a press outside it closes it, except on a damper
+    // already on the plate (the hand is arranging them, the drawer stays open)
     if (cabinet.userOpen) {
+      if (!cabinet.inTray(x, y)) {
+        const pk = cabinet.downPlateDamper(p, x, y, touch);
+        if (pk) { p.kind = pk; return true; }
+      }
       const k = cabinet.down(p, x, y, touch);
       if (k) { p.kind = k; return true; }
     }

@@ -1440,6 +1440,7 @@ export function createCabinet(env) {
 
   return {
     layout, update, down, move, up, downPlateDamper, collectDampers, toggle, hitFront, cursor,
+    inTray: (x, y) => st.open > 0.05 && (inTray(x, y) || hitFront(x, y, false)),
     drawPlate, drawFront, drawTray, drawHeld,
     hover(x, y) { hoverFront = env.isOn('drawer') && hitFront(x, y, false); },
     plateDamperAt: (x, y) => !!damperAt(x, y, false, 'plate'),

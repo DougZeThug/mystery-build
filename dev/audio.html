@@ -75,6 +75,11 @@
         <div class="row"><label>floor</label><input id="floor" type="range" min="0" max="1" step="0.01" value="0"><output id="floorV">0</output></div>
         <div class="row"><label>sand</label><input id="sandN" type="range" min="0" max="26000" step="500" value="15000"><output id="sandNV"></output></div>
       </section>
+      <section style="margin-top:12px">
+        <h2>later <small>phonograph · keeper · clinging</small></h2>
+        <div class="toggles"><button id="phRec">record</button><button id="phPlay">play back</button><button id="keeper">the keeper</button><button id="cling">they cling</button></div>
+        <div class="readout" id="phInfo">the phonograph cuts what the plate sings, then plays it back into it</div>
+      </section>
     </div>
     <section>
       <h2>one-shots <small>sent as bus events, like the game</small></h2>
@@ -100,9 +105,10 @@ const state = { plate: { fatigue: 0, cracks: [] }, species: {} };
 const field = createField({ state, bus: null });
 const bow = { held: false, bowing: false, edge: 'right', t: 0.31, speed01: 0, mode: null, x: innerWidth * 0.75 };
 const pops = [];
+let keeperOn = false;
 const game = {
   bus, state, field, view: { vw: innerWidth, anchors: { cord: { x: innerWidth * 0.58 }, journal: { x: innerWidth * 0.2 } } },
-  tools: { bow }, life: { populations: () => pops, species: {} },
+  tools: { bow, phono: { recording: false, playing: false } }, life: { populations: () => pops, species: {}, motes: [] },
   light: { on: true, level: 1 }, fx: { choir: 0, floor: 0 }, hold: null, sand: { n: 15000 },
 };
 const audio = createAudio(game);
@@ -171,6 +177,7 @@ function syncPops() {
     if (!comps.length) continue;
     pops.push({ id, count, meanE, cu, cv: 0, comps, ks: comps.map((c) => modeById(c).k), species: { aurata: id.endsWith('*') } });
   }
+  if (keeperOn) pops.push({ id: 'keeper', count: 1, meanE: 0.95, cu: -0.5, cv: 0.8, comps: ['floor'], ks: [2], species: { keeper: true }, keeper: true });
 }
 document.querySelectorAll('[data-preset]').forEach((b) => { b.onclick = () => { rows = PRESETS[b.dataset.preset].map((r) => [...r]); renderSpecies(); syncPops(); }; });
 renderSpecies(); syncPops();
@@ -184,6 +191,49 @@ let pouring = false;
 $('pour').onpointerdown = () => { start(); pouring = true; $('pour').classList.add('on'); };
 addEventListener('pointerup', () => { pouring = false; $('pour').classList.remove('on'); });
 for (const id of ['choir', 'floor', 'sandN']) $(id).oninput = () => { $(id + 'V').textContent = $(id).value; };
+
+// --- the phonograph (a tiny stand-in for tools-phono.js: frames of the plate's spectrum every
+// 0.25 s while cutting, played back into field source 'phono'), the keeper, clinging singers ----
+const ph = game.tools.phono, cyl = [];
+let phT = 0, keeperMet = false, clingOn = false;
+function phStop() {
+  if (ph.recording) { ph.recording = false; bus.emit('phono:record', { on: false }); }
+  if (ph.playing) { ph.playing = false; bus.emit('phono:play', { on: false }); field.setSource('phono', []); }
+  bus.emit('sfx', { name: 'phonoStop', pan: 0.45 });
+}
+$('phRec').onclick = () => {
+  start();
+  if (ph.recording || ph.playing) phStop();
+  else { cyl.length = 0; phT = 0; ph.recording = true; bus.emit('sfx', { name: 'phonoNeedle', pan: 0.45 }); bus.emit('phono:record', { on: true }); }
+};
+$('phPlay').onclick = () => {
+  start();
+  if (ph.recording || ph.playing) phStop();
+  else if (cyl.length) { phT = 0; ph.playing = true; bus.emit('sfx', { name: 'phonoNeedle', pan: 0.45 }); bus.emit('phono:play', { on: true }); }
+};
+function phStep(dt) {
+  phT += dt;
+  if (ph.recording) {
+    while (cyl.length < phT / 0.25 && cyl.length < 80) cyl.push(field.spectrum().filter((e) => e.mode !== 'floor' && e.amp > 0.01).map((e) => ({ mode: e.mode, amp: e.amp * 0.85 })));
+    if (cyl.length >= 80) phStop();
+  } else if (ph.playing) {
+    const f = cyl[Math.min(cyl.length - 1, Math.floor(phT / 0.25))] || [];
+    field.setSource('phono', f.length ? f : []);
+    if (phT >= cyl.length * 0.25) phStop();
+  }
+  $('phRec').classList.toggle('on', ph.recording); $('phPlay').classList.toggle('on', ph.playing);
+  $('phInfo').textContent = ph.recording ? `cutting · ${(phT).toFixed(1)} s` : ph.playing ? `playing back · ${phT.toFixed(1)} / ${(cyl.length * 0.25).toFixed(1)} s` : cyl.length ? `a cylinder of ${(cyl.length * 0.25).toFixed(1)} s` : 'the phonograph cuts what the plate sings, then plays it back into it';
+}
+$('keeper').onclick = () => {
+  start();
+  keeperOn = !keeperOn; $('keeper').classList.toggle('on', keeperOn);
+  if (keeperOn && !keeperMet) { keeperMet = true; bus.emit('keeper:arrive', { mote: { u: 0, v: 0, keeper: true } }); }
+  syncPops();
+};
+$('cling').onclick = () => {
+  clingOn = !clingOn; $('cling').classList.toggle('on', clingOn);
+  game.life.motes = clingOn ? pops.filter((p) => !p.keeper).slice(0, 2).flatMap((p) => Array.from({ length: Math.min(4, p.count) }, () => ({ sp: p.id, state: 'cling' }))) : [];
+};
 
 // --- one-shots ----------------------------------------------------------------------------------
 const m1 = () => ({ u: Math.random() * 1.6 - 0.8, v: 0.1, sp: pops[0]?.id || '2.4+', spec: pops[0] ? { comps: pops[0].comps } : null });
@@ -214,6 +264,9 @@ const SHOTS = [
     ['moth', () => bus.emit('moth', { state: 'arrive', u: -0.5 })],
     ['moth lands', () => bus.emit('moth', { state: 'land', u: 0.1 })],
     ['moth leaves', () => bus.emit('moth', { state: 'leave', u: 0.4 })],
+    ['keeper arrives', () => bus.emit('keeper:arrive', { mote: { u: -0.3, v: 0, keeper: true } })],
+    ['needle down', () => bus.emit('sfx', { name: 'phonoNeedle', pan: 0.45 })],
+    ['needle up', () => bus.emit('sfx', { name: 'phonoStop', pan: 0.45 })],
   ]],
   ['the room', [
     ['cord', () => bus.emit('sfx', { name: 'cord' })],
@@ -268,6 +321,7 @@ function frame(now) {
   // the population sings into the plate (bible: a_s = 0.42 (1 - e^(-n/3)) (0.4 + 0.6 E))
   const chorus = [];
   if (chorusOn) for (const p of pops) {
+    if (p.keeper) continue;
     const a = 0.42 * (1 - Math.exp(-p.count / 3)) * (0.4 + 0.6 * p.meanE);
     for (const c of p.comps) chorus.push({ mode: c, amp: a / Math.sqrt(p.comps.length) });
   }
@@ -277,11 +331,12 @@ function frame(now) {
   field.setSource('floor', game.fx.floor > 0.01 ? [{ mode: 'floor', amp: 1.2 * game.fx.floor }] : []);
   game.sand.n = +$('sandN').value; $('sandNV').textContent = game.sand.n;
   if (pouring) bus.emit('sand:pour', { u: 0.1, v: 0, n: 6 });
+  phStep(dt);
   field.update(dt);
   audio.update(dt);
   const s = audio.stats();
   $('stats').textContent = s.state === 'idle' ? 'idle · press any button to start' :
-    `${s.state} · ${s.sampleRate} Hz · ${s.nodes} nodes · ${s.oneShots} one-shots · plate ${s.plate} · singers ${s.singers}${s.bow ? ' · bow' : ''}${s.drone ? ' · drone' : ''}${s.floor ? ' · floor' : ''}${s.sand ? ' · sand' : ''}`;
+    `${s.state} · ${s.sampleRate} Hz · ${s.nodes} nodes · ${s.oneShots} one-shots · plate ${s.plate} · singers ${s.singers}${s.bow ? ' · bow' : ''}${s.drone ? ' · drone' : ''}${s.floor ? ' · floor' : ''}${s.sand ? ' · sand' : ''}${s.phono ? ` · phonograph (${s.phonoTones} tones)` : ''}${s.keeper ? ' · keeper' : ''}${s.clinging ? ` · ${s.clinging} clinging` : ''}`;
   draw();
 }
 requestAnimationFrame(frame);
