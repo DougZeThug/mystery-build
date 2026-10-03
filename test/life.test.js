@@ -230,10 +230,10 @@ test('quickening is kept per mode: wandering to a neighbour and back loses littl
   step(g, 3, '2.5+', 0.8);                     // its mirror for a moment (a different figure)
   const blob = JSON.parse(JSON.stringify(g.life.serialize()));
   assert.ok(Array.isArray(blob.qs) && blob.qs.some(([id, q]) => id === '2.5-' && q > q0 - 0.2), 'per-mode quickening not saved');
-  const ev = listen(['mote:birth']);
-  step(g, 3.5, '2.5-', 0.8);                   // and back: it picks up where it left off
-  ev.off(); g.life.destroy();
-  assert.ok(ev.seen['mote:birth'].some((e) => e.species.id === '2.5-'), 'progress on 2.5- was thrown away');
+  // and back: it picks up where it left off (from nothing it would take 2.2 + 11 s)
+  const at = firstBirthOf(g, '2.5-', 12, () => g.field.setSource('bow', [{ mode: '2.5-', amp: 0.8 }]));
+  g.life.destroy();
+  assert.ok(at !== null && at <= 10.5, `progress on 2.5- was thrown away (born ${at === null ? 'never' : at.toFixed(1) + ' s'} after returning)`);
 });
 
 test('the phonograph brings back a vanished hybrid, chord and all', () => {

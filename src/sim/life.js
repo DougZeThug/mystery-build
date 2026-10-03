@@ -1084,6 +1084,16 @@ export function createLife(game) {
     return false;
   }
 
+  // the mode the player is sounding loudest (bow, fork, phonograph), or -1
+  function heldMode() {
+    if (!drivenNow || !field.getSource) return -1;
+    let best = -1, ba = 0.05;
+    for (const sid of PLAYER_SOURCES) {
+      const src = field.getSource(sid);
+      if (src) for (const c of src) if (c.amp > ba) { const md = modeById(c.mode); if (md) { ba = c.amp; best = md.index; } }
+    }
+    return best;
+  }
   // how hard the player holds one mode (bow, fork and phonograph together); FORKED: a touched
   // tuning fork is sounding it
   let FORKED = false;
@@ -1111,14 +1121,15 @@ export function createLife(game) {
       for (const id in state.species) {
         const r = state.species[id];
         if (!r || !r.extinct || r.aurata || r.keeper || id === KEEPER_ID || !Array.isArray(r.comps) || !r.comps.length) continue;
-        let mn = Infinity;
+        let mn = Infinity, a2 = 0;
         for (const cm of r.comps) {
           let a = 0;
           for (const c of src) if (c.mode === cm) { a = c.amp; break; }
           if (!(a > 0.04 && a >= 0.3 * top)) { mn = 0; break; }
           if (a < mn) mn = a;
+          a2 += a * a;
         }
-        if (mn > 0 && (!best || r.comps.length > best.comps.length || (r.comps.length === best.comps.length && mn > bestMin))) { best = r; bestMin = mn; }
+        if (mn > 0 && (!best || r.comps.length > best.comps.length || (r.comps.length === best.comps.length && mn > bestMin))) { best = r; bestMin = mn; GHOST_DRIVE = Math.sqrt(a2); }
       }
     }
     if (best !== ghostRec) { ghostRec = best; ghostT = 0; }
@@ -1126,15 +1137,15 @@ export function createLife(game) {
     let s2 = 0;
     for (const cm of best.comps) { const a = field.amp ? field.amp(cm) : 0; s2 += a * a; }
     GHOST_SHARE = field.total > 1e-3 ? s2 / (field.total * field.total) : 0;
-    GHOST_DRIVE = bestMin;
     ghostT = GHOST_SHARE > TUNE.birthShare ? ghostT + dt : 0;
     return best;
   }
 
-  // every mode but the one the plate is holding forgets its quickening, slowly
-  function fadeQuick(dt, keep) {
+  // every mode but the one the plate is holding, and the one the player is still sounding (a
+  // fading fork, a figure settling again), forgets its quickening, slowly
+  function fadeQuick(dt, keep, held) {
     const d = TUNE.quickDecay * dt;
-    for (let i = 0; i < NM; i++) if (i !== keep && quickBy[i] > 0) quickBy[i] = Math.max(0, quickBy[i] - d);
+    for (let i = 0; i < NM; i++) if (i !== keep && i !== held && quickBy[i] > 0) quickBy[i] = Math.max(0, quickBy[i] - d);
   }
 
   function tryBirth(dt) {
@@ -1156,7 +1167,8 @@ export function createLife(game) {
     const minTotal = drive > 0 ? TUNE.driveFrom : driven ? TUNE.birthTotal : TUNE.songTotal;
     const coherent = dom && !dom.special && dom.k >= 5 && awake && stable > (early ? TUNE.earlyStable : TUNE.birthStable) &&
       share > TUNE.birthShare && field.total > minTotal;
-    if (!coherent) { fadeQuick(dt, -1); return; }
+    const held = heldMode();
+    if (!coherent) { fadeQuick(dt, -1, held); return; }
     const domSp = species[dom.id];
     const familiar = domSp && domSp.n > 0;
     let rate;
@@ -1179,7 +1191,7 @@ export function createLife(game) {
     }
     rate *= Math.pow(Math.max(0, 1 - motes.length / CAP), 0.35);
     const qi = dom.index;
-    fadeQuick(dt, qi);
+    fadeQuick(dt, qi, held);
     quickBy[qi] += rate * dt;
     if (quickBy[qi] < 1 || birthGap > 0 || motes.length >= CAP) return;
 
