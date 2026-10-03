@@ -236,6 +236,8 @@ uniform vec2 uEnTexel;
 uniform vec2 uWearTexel;
 uniform vec2 uAim;         // where the beam's axis meets the plate (css px)
 uniform vec4 uDamp[6];     // felt dampers on the plate: u, v, r, on
+uniform float uWarm;       // the lamp's filament warming (the first birth)
+uniform vec4 uFirst;       // the first birth: u, v, seconds since, strength (a shiver through the bronze)
 uniform sampler2D tMatA, tMatB, tFelt, tField, tSand, tWear, tCrack, tEngr, tLight;
 ${NOISE}
 #define T0(s, uv) textureLod(s, uv, 0.0)
@@ -289,7 +291,7 @@ void main() {
 
   // light
   float rr = length(css - uAim) / (unit * 2.0);
-  vec3 lampCol = mix(LAMP_COL, vec3(1.0, 0.74, 0.42), uChoir * 0.55);
+  vec3 lampCol = mix(LAMP_COL, vec3(1.0, 0.74, 0.42), max(uChoir * 0.55, uWarm));
   lampCol *= mix(vec3(1.0), vec3(1.05, 0.90, 0.76), smoothstep(0.3, 0.8, rr));    // warmer, redder skirt
   float E = pool(css) * uLightI * (1.0 + 0.14 * uChoir);
   vec3 Lv = vec3(uLamp.xy - css, uLamp.z);
@@ -376,6 +378,15 @@ void main() {
     vec2 perp = vec2(-dir.y, dir.x);
     N.xy += perp * slope * 0.05 * (1.0 - 0.75 * vib);
     N.xy += vec2(fxg, fyg) * ph * 0.3;
+    // the first birth: one slow ring of light runs out through the metal from where it happened
+    float shiver = 0.0;
+    if (uFirst.w > 0.0) {
+      vec2 fd = pu - uFirst.xy;
+      float fr = length(fd);
+      float front = uFirst.z * 0.8;
+      shiver = exp(-pow((fr - front) / 0.07, 2.0)) * uFirst.w * exp(-front * 0.9);
+      N.xy += fd / max(fr, 1e-3) * shiver * 0.12 * sin((fr - front) * 70.0);
+    }
 
     // sand (sampled early: it shades the metal around it and hides the engravings)
     float dS = sd.r, gS = sd.g;
@@ -411,7 +422,7 @@ void main() {
     vec3 specCol = mix(alb * 2.6, vec3(0.58, 0.32, 0.14), 0.32) * (1.0 - pat * 0.9) + vec3(0.03, 0.02, 0.012) * pol;
     vec3 Ed = lampCol * E * sandShadow * dampSh;
 
-    float shim = 1.0 + 0.16 * f * ph;
+    float shim = 1.0 + 0.16 * f * ph + 0.45 * shiver;
     vec3 metal = alb * Ed * (mix(0.46, 0.95, pat) * NdL + 0.03) * cav;
     metal += specCol * Ed * (hot + sheen + aniso * (1.0 - 0.6 * vib)) * cav;
     metal += specCol * Ed * scr * 0.4 * pow(NdH, 30.0) * (1.0 - vib);
@@ -586,6 +597,7 @@ layout(location = 1) in vec4 aA;      // u v r e
 layout(location = 2) in vec4 aB;      // age01 state n1 m1
 layout(location = 3) in vec4 aC;      // s1 n2 m2 s2
 layout(location = 4) in vec4 aD;      // n3 m3 s3 flags
+layout(location = 5) in float aBirth; // seconds since this singer was born (< 0: unknown / long ago)
 uniform vec2 uRes;
 uniform float uDpr;
 uniform vec3 uPlate;
@@ -593,6 +605,7 @@ uniform vec3 uLamp;
 uniform float uTime;
 uniform int uPass;
 uniform float uLmExt;
+uniform float uMinR;       // smallest radius a singer is drawn at (plate units; small plates)
 uniform vec3 uModeCol[128];
 out vec2 vQ;
 flat out vec4 vA;
@@ -604,6 +617,7 @@ flat out vec3 vC2;
 flat out vec3 vC3;
 flat out vec2 vSh;
 flat out vec3 vNorm;
+flat out float vBirth;
 ${GLSL_MODE}
 vec3 modeCol(float n, float m, float s) {
   int idx = int(n + 0.5) * 8 + int(m + 0.5) + (s < 0.0 ? 64 : 0);
@@ -611,7 +625,7 @@ vec3 modeCol(float n, float m, float s) {
 }
 float h11(float p) { p = fract(p * 0.1031); p *= p + 33.33; p *= p + p; return fract(p); }
 void main() {
-  vA = aA; vB = aB; vC = aC; vD = aD;
+  vA = aA; vB = aB; vC = aC; vD = aD; vBirth = aBirth;
   vNorm = vec3(chladniNorm(vec3(aB.z, aB.w, aC.x)), chladniNorm(vec3(aC.y, aC.z, aC.w)), chladniNorm(vec3(aD.x, aD.y, aD.z)));
   vC1 = modeCol(aB.z, aB.w, aC.x);
   vC2 = aC.y > 0.5 ? modeCol(aC.y, aC.z, aC.w) : vC1;
@@ -620,6 +634,9 @@ void main() {
   if (aC.y > 0.5 && distance(vC2, vC1) < 0.12) vC2 = mix(vC2, vec3(0.62, 0.92, 1.0), 0.55);
   if (aD.x > 0.5 && (distance(vC3, vC1) < 0.12 || distance(vC3, vC2) < 0.12)) vC3 = mix(vC3, vec3(1.0, 0.70, 0.74), 0.55);
   float r = max(aA.z, 0.005);
+  // on a small plate a singer would be a few pixels across: draw it no smaller than about uMinR,
+  // keeping a little of the difference between a newborn, an adult and a chord
+  float rd = max(r, uMinR * sqrt(r / 0.038));
   float code = floor(aB.y + 0.001);
   float flags = aD.w;
   float lift = mod(floor(flags / 16.0), 2.0);
@@ -630,11 +647,11 @@ void main() {
   vec2 c = aA.xy;
   if (code > 4.5 && code < 5.5) {                       // startled: a shiver
     float ph = h11(r * 5000.0);
-    c += vec2(sin(uTime * 61.0 + ph * 9.0), cos(uTime * 53.0 + ph * 7.0)) * r * 0.18 * (1.0 - fract(aB.y));
+    c += vec2(sin(uTime * 61.0 + ph * 9.0), cos(uTime * 53.0 + ph * 7.0)) * rd * 0.18 * (1.0 - fract(aB.y));
   }
   if (cling > 0.5) {                                    // clinging on: a tremble that grows as the grip fails
     float ph = h11(r * 7919.0);
-    c += vec2(sin(uTime * 83.0 + ph * 11.0) + 0.5 * sin(uTime * 131.0), cos(uTime * 71.0 + ph * 5.0) + 0.5 * cos(uTime * 117.0)) * r * (0.06 + 0.22 * fract(aB.y));
+    c += vec2(sin(uTime * 83.0 + ph * 11.0) + 0.5 * sin(uTime * 131.0), cos(uTime * 71.0 + ph * 5.0) + 0.5 * cos(uTime * 117.0)) * rd * (0.06 + 0.22 * fract(aB.y));
   }
   vec2 ccss = uPlate.xy + c * uPlate.z;
   vec2 away = ccss - uLamp.xy;
@@ -646,9 +663,9 @@ void main() {
     gl_Position = vec4(p / uLmExt, 0.0, 1.0);
     return;
   }
-  float ext = uPass == 0 ? 2.4 : (keeper > 0.5 ? 5.2 : 3.4);
+  float ext = uPass == 0 ? 2.6 : (keeper > 0.5 ? 5.2 : 3.4);
   vQ = aCorner * ext;
-  vec2 css = ccss + aCorner * ext * r * uPlate.z;
+  vec2 css = ccss + aCorner * ext * rd * uPlate.z;
   vec2 vp = uRes / uDpr;
   gl_Position = vec4(css.x / vp.x * 2.0 - 1.0, 1.0 - css.y / vp.y * 2.0, 0.0, 1.0);
 }`;
@@ -664,6 +681,7 @@ flat in vec3 vC2;
 flat in vec3 vC3;
 flat in vec2 vSh;
 flat in vec3 vNorm;
+flat in float vBirth;
 uniform float uTime;
 uniform int uPass;
 uniform float uLevel;
@@ -690,6 +708,14 @@ float floorFigure(vec2 lq) {
   float ws = fwidth(ld);
   float spokes = (1.0 - smoothstep(0.0, ws * 1.3 + 0.012, sa)) * smoothstep(0.18, 0.4, ld) * 0.55;
   return mix(max(rings, spokes), 0.3, smoothstep(0.3, 0.7, wr));
+}
+
+// A birth's light, over seconds since birth: it gathers while the sand is drawn in, flares as the
+// body forms (~0.95 s), and settles over the next few seconds.
+float birthGlow(float bt) {
+  if (bt < 0.0 || bt > 5.0) return 0.0;
+  float rise = smoothstep(0.0, 0.95, bt);
+  return rise * rise * exp(-max(bt - 0.95, 0.0) * 1.25);
 }
 
 // one component's luminous figure: anti-aliased lines where the mode is still
@@ -727,6 +753,10 @@ void main() {
   bool born = code > 9.5 && code < 10.5;
   bool dying = code > 8.5 && code < 9.5;
   bool falling = code > 7.5 && code < 8.5;
+  // seconds since birth: from the renderer's own record of the event, else from the born state
+  float bt = vBirth >= 0.0 ? vBirth : (born ? prog * 1.2 : -1.0);
+  float bloom = birthGlow(bt);
+  float newborn = bt >= 0.0 ? 1.0 - smoothstep(1.6, 4.5, bt) : 0.0;
   if (born) { scale = 0.25 + 0.75 * smoothstep(0.2, 1.0, prog); alpha = smoothstep(0.25, 0.85, prog); }
   else if (falling) { scale = 1.0 - 0.85 * prog; alpha = (1.0 - prog) * (1.0 - prog); }
   else if (dying) { crumble = prog; alpha = 1.0 - prog * prog; }
@@ -734,9 +764,11 @@ void main() {
   else if (code > 1.5 && code < 2.5) { boost = sin(prog * 3.14159) * 0.6; }
   else if (code > 2.5 && code < 3.5) { boost = sin(prog * 3.14159) * (0.5 + fls); }
   if (fls > 0.5 && !(code > 2.5 && code < 3.5)) boost += 0.8;
+  boost += 1.4 * bloom;                                  // being born is an event, at least as bright as being eaten
   if (keeper > 0.5) scale *= 1.0 + 0.05 * sin(uTime * 0.7 + phase * 6.2832);   // she breathes, slowly
 
-  float inten = 0.32 + 0.68 * e;
+  // a newborn arrives at full brightness; its hunger only shows once it has settled
+  float inten = 0.32 + 0.68 * mix(e, 1.0, newborn);
   inten *= 0.88 + 0.12 * sin(uTime * (1.1 + vB.z * 0.12 + vB.w * 0.05) + phase * 6.2832);   // halo pulse, by mode
   float hunger = smoothstep(0.26, 0.04, e);
   inten *= mix(1.0, 0.45 + 0.55 * step(0.32, vnoise1(uTime * 9.0 + phase * 40.0)), hunger);
@@ -764,6 +796,14 @@ void main() {
     float fall = 1.0 / ((1.0 + x2) * sqrt(1.0 + x2));
     fall *= 1.0 - smoothstep(0.12, 0.5, d);
     vec3 sl = sat(cAvg, 1.4) * inten * fall * alpha * (1.0 + boost) * 1.1 * scale * (cling ? 1.3 : 1.0);
+    if (bloom > 0.0) {
+      // the birth: a soft pulse of light on the bronze, a quarter of a plate unit across. In full
+      // light the scene only whispers the singers' light, so the pulse is stronger there.
+      float rb = 0.085;
+      float xb = d * d / (rb * rb);
+      float pb = 1.0 / ((1.0 + xb) * sqrt(1.0 + xb)) * (1.0 - smoothstep(0.18, 0.5, d));
+      sl += mix(cAvg, vec3(1.0, 0.86, 0.66), 0.45) * pb * bloom * mix(0.9, 2.4, uLevel);
+    }
     oC = vec4(sl, dot(sl, vec3(0.333)));
     return;
   }
@@ -786,7 +826,9 @@ void main() {
     feet *= (1.0 - lift) * alpha * (1.0 - crumble);
     float lit = smoothstep(0.02, 0.5, uLevel);
     float bodyD = (1.0 - smoothstep(0.9, 1.02, d / max(scale, 0.05))) * (keeper > 0.5 ? 0.5 : 0.55) * alpha * (1.0 - crumble);
-    float a = max(max(sh, bodyD) * lit, feet * 0.85);
+    // a faint darkening of the sand under the halo, so the glow reads against pale grains
+    float contact = 0.3 * (1.0 - smoothstep(0.7, 2.5, d / max(scale, 0.3))) * alpha * (1.0 - crumble) * (1.0 - lift);
+    float a = max(max(max(sh, bodyD), contact) * lit, feet * 0.85);
     oC = vec4(vec3(0.03, 0.022, 0.014) * feet * 0.85, a);
     return;
   }
@@ -837,18 +879,21 @@ void main() {
     float fa = code > 2.5 && code < 3.5 ? sin(prog * 3.14159) : 0.7;
     col += vec3(1.0, 0.95, 0.85) * exp(-d * d * 0.9) * fa * 1.6;
   }
+  vec3 spark = vec3(0.0);                                                   // not faded with the body
   if (born) {                                                               // assembled from sparkles
     float conv = smoothstep(0.0, 0.8, prog);
-    for (int i = 0; i < 12; i++) {
+    float fade = smoothstep(0.0, 0.12, prog) * (1.0 - smoothstep(0.75, 1.0, prog));
+    for (int i = 0; i < 14; i++) {
       float fi = float(i);
       float a = phase * 6.2832 + fi * 2.39996 + prog * 4.0;
-      float rad = mix(2.9, 0.15, conv) * (0.65 + 0.35 * hash11(fi + phase * 17.0));
+      float rad = mix(3.1, 0.15, conv) * (0.62 + 0.38 * hash11(fi + phase * 17.0));
       vec2 sp = vec2(cos(a), sin(a)) * rad;
       vec2 dq = q - sp;
-      col += mix(cAvg, vec3(1.0), 0.4) * exp(-dot(dq, dq) * 70.0) * 1.3 * (1.0 - smoothstep(0.75, 1.0, prog));
+      spark += mix(cAvg, vec3(1.0, 0.95, 0.85), 0.5) * exp(-dot(dq, dq) * 42.0) * 1.6 * fade;
     }
-    col += cAvg * exp(-d * d * 2.0) * smoothstep(0.6, 1.0, prog) * (1.0 - prog) * 1.5;
   }
+  // the flare as the body forms, settling into the singer's own light
+  col += mix(cHalo, vec3(1.0, 0.95, 0.88), 0.35) * (exp(-d * d * 1.4) * 1.3 + exp(-d * 0.9) * 0.3) * bloom;
   if (dying) {                                                              // crumbling grains
     vec3 cc = mix(cAvg * 0.6, GOLD, goldDeath * 0.75);
     for (int i = 0; i < 14; i++) {
@@ -864,7 +909,7 @@ void main() {
     col += GOLD * goldDeath * exp(-d * d * 1.6) * sin(crumble * 3.14159) * 0.35;
   }
 
-  oC = vec4(col * alpha, 1.0);
+  oC = vec4(col * alpha + spark, 1.0);
 }`;
 
 // ---------------------------------------------------------------------------------------------

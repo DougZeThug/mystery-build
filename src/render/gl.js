@@ -20,6 +20,8 @@ const LM_SIZE = 256;          // singer light map (plate space)
 const LM_EXT = 1.25;          // ... covering plate units [-1.25, 1.25]
 const DUST_N = 150;
 const MAX_SINGERS = 64;
+const MIN_SINGER_PX = 9;      // singers are drawn no smaller than about this radius (CSS px)
+const BIRTH_SECS = 5;         // how long a birth's light lasts (see birthGlow in shaders.js)
 
 // Canonical singer state codes and flag bits as the shaders read them. life.js owns the real
 // encoding (STATES / FLAG); instance data is remapped to these names every frame, so a reordered
@@ -89,7 +91,7 @@ export function createRenderer(canvas, game) {
     const P = {};               // programs
     const T = {};               // textures
     const R = {};               // render targets
-    let vaoEmpty = null, vaoSing = null, instBuf = null, instCap = 0;
+    let vaoEmpty = null, vaoSing = null, instBuf = null, birthBuf = null, instCap = 0;
     let lost = false;
     let W = 0, H = 0, matSize = 0, ckSize = 0, enSize = 0;
     // internal resolution of the scene (bloom follows); drops a step if the GPU cannot keep up
@@ -106,6 +108,11 @@ export function createRenderer(canvas, game) {
     let fontsAsked = false, keeperSig = '', keeperAt = -10;
     // singer instances, remapped to the canonical codes (see CANON_STATES / CANON_FLAGS)
     let instLocal = new Float32Array(MAX_SINGERS * 16);
+    let birthLocal = new Float32Array(MAX_SINGERS);
+    // births seen on the bus (the mote and when), so a newborn's light can outlast its 'born' state;
+    // and the very first birth of this plate, which the room itself answers
+    const births = [];
+    let firstCheck = null, first = null;
     const stateMap = new Float32Array(32);
     const flagMap = new Float32Array(16);           // life bit index -> canonical bit value
     let mapStates = null, mapFlags = null;
@@ -201,6 +208,12 @@ export function createRenderer(canvas, game) {
         gl.vertexAttribPointer(1 + a, 4, gl.FLOAT, false, 64, a * 16);
         gl.vertexAttribDivisor(1 + a, 1);
       }
+      birthBuf = gl.createBuffer();                     // one float each: seconds since birth
+      gl.bindBuffer(gl.ARRAY_BUFFER, birthBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, instCap * 4, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(5);
+      gl.vertexAttribPointer(5, 1, gl.FLOAT, false, 4, 0);
+      gl.vertexAttribDivisor(5, 1);
       gl.bindVertexArray(null);
 
       // placeholder textures until real data arrives
@@ -526,6 +539,42 @@ export function createRenderer(canvas, game) {
       T.engr = tex(enSize, enSize, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, data);
     }
 
+    // ---- births ---------------------------------------------------------------------------------
+    // Seconds since birth for each instance (-1: not a birth we saw). Instances are matched to the
+    // motes from 'mote:birth' by position, so nothing here depends on life.js's ordering.
+    function birthAges(data, count, t) {
+      if (birthLocal.length < count) birthLocal = new Float32Array(count);
+      birthLocal.fill(-1, 0, count);
+      for (let i = births.length - 1; i >= 0; i--) {
+        const b = births[i];
+        const age = t - b.t0;
+        if (b.m.dead || !(age >= 0 && age < BIRTH_SECS)) { births.splice(i, 1); continue; }
+        const u = Math.fround(b.m.u), v = Math.fround(b.m.v);
+        for (let k = 0; k < count; k++) if (data[k * 16] === u && data[k * 16 + 1] === v) { birthLocal[k] = age; break; }
+      }
+      return birthLocal;
+    }
+    // The first singer ever: the lamp's filament swells warmer for a few seconds, and one ring of
+    // light runs out through the bronze as the body forms. Decided a frame after the event, once
+    // every listener (progress keeps the count) has seen it.
+    function firstBirth(t) {
+      if (firstCheck) {
+        if ((game.state?.stats?.births | 0) === 1) first = { u: num(firstCheck.m.u), v: num(firstCheck.m.v), t0: firstCheck.t0 };
+        firstCheck = null;
+      }
+      const bt = first ? t - first.t0 : -1;
+      if (first && !(bt >= 0 && bt < 8)) first = null;
+      return bt;
+    }
+    game.bus?.on?.('mote:birth', (e) => {
+      const m = e && e.mote;
+      if (!m || typeof m !== 'object') return;
+      const b = { m, t0: num(game.t) };
+      if (births.length >= MAX_SINGERS) births.shift();
+      births.push(b);
+      firstCheck = b;
+    });
+
     // ---- frame ----------------------------------------------------------------------------------
     function render() {
       if (lost || gl.isContextLost()) return;
@@ -539,7 +588,9 @@ export function createRenderer(canvas, game) {
       const Lt = game.light || {}, fx = game.fx || {};
       const level = clamp01(num(Lt.level, 1));
       const flick = clamp01(num(Lt.flicker));
-      const lightI = level * (1 - 0.6 * flick * (0.55 + 0.45 * Math.sin(t * 47.3)));
+      const fbt = firstBirth(t);
+      const warm = fbt >= 0 ? smooth(0.3, 1.4, fbt) * (1 - smooth(2.8, 7.5, fbt)) : 0;
+      const lightI = level * (1 - 0.6 * flick * (0.55 + 0.45 * Math.sin(t * 47.3))) * (1 + 0.2 * warm);
       const choir = clamp01(num(fx.choir)), floorFx = clamp01(num(fx.floor));
       const shake = clamp01(num(fx.shake)), flash = clamp01(num(fx.flash));
       const dpr = v.dpr || 1;
@@ -594,11 +645,15 @@ export function createRenderer(canvas, game) {
           instCap = count;
           gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
           gl.bufferData(gl.ARRAY_BUFFER, instCap * 64, gl.DYNAMIC_DRAW);
+          gl.bindBuffer(gl.ARRAY_BUFFER, birthBuf);
+          gl.bufferData(gl.ARRAY_BUFFER, instCap * 4, gl.DYNAMIC_DRAW);
         }
         if (count > 0) {
           const data = remapInstances(inst.data, count, game.life);
           gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
           gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, count * 16);
+          gl.bindBuffer(gl.ARRAY_BUFFER, birthBuf);
+          gl.bufferSubData(gl.ARRAY_BUFFER, 0, birthAges(inst.data, count, t), 0, count);
         }
       }
 
@@ -646,6 +701,9 @@ export function createRenderer(canvas, game) {
       gl.uniform2f(Pc.u.uEnTexel, 1 / enSize, 1 / enSize);
       gl.uniform2f(Pc.u.uWearTexel, 1 / (game.WEAR || 128), 1 / (game.WEAR || 128));
       gl.uniform2f(Pc.u.uAim, ax, ay);
+      gl.uniform1f(Pc.u.uWarm, 0.32 * warm);
+      gl.uniform4f(Pc.u.uFirst, first ? first.u : 0, first ? first.v : 0, Math.max(0, fbt - 0.95),
+        fbt > 0.95 && fbt < 6 ? 0.7 * (1 - smooth(4, 6, fbt)) : 0);
       if (Pc.u.uDamp) gl.uniform4fv(Pc.u.uDamp, dampArr);
       bind(0, T.matA); bind(1, T.matB); bind(2, T.felt); bind(3, T.field); bind(4, T.sand);
       bind(5, T.wear); bind(6, T.crack); bind(7, T.engr); bind(8, R.lm.tex);
@@ -748,6 +806,7 @@ export function createRenderer(canvas, game) {
       gl.uniform1f(Ps.u.uLmExt, LM_EXT);
       gl.uniform1f(Ps.u.uLevel, level);
       gl.uniform1f(Ps.u.uChoir, choir);
+      gl.uniform1f(Ps.u.uMinR, MIN_SINGER_PX / Math.max(1, unit));
     }
 
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); lost = true; });
