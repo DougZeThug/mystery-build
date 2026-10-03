@@ -24,8 +24,8 @@ const MAX_SINGERS = 64;
 // Canonical singer state codes and flag bits as the shaders read them. life.js owns the real
 // encoding (STATES / FLAG); instance data is remapped to these names every frame, so a reordered
 // or extended list on the life side cannot scramble the look.
-const CANON_STATES = ['walk', 'feed', 'split', 'fuse', 'eat', 'startle', 'sleep', 'nestle', 'fall', 'die', 'born', 'cling'];
-const CANON_FLAGS = { aurata: 1, sleep: 2, flash: 4, nestle: 8, float: 16, lunge: 32, keeper: 64, ageDeath: 128, cling: 256, old: 512 };
+export const CANON_STATES = ['walk', 'feed', 'split', 'fuse', 'eat', 'startle', 'sleep', 'nestle', 'fall', 'die', 'born', 'cling'];
+export const CANON_FLAGS = { aurata: 1, sleep: 2, flash: 4, nestle: 8, float: 16, lunge: 32, keeper: 64, ageDeath: 128, cling: 256, old: 512 };
 
 const clamp01 = (x) => (x > 0 ? (x < 1 ? x : 1) : 0);
 const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
