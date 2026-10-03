@@ -1,12 +1,16 @@
 // Over-bowing study for the singers: how long they cling, how many are thrown, how many fall,
 // for a range of violent bowing patterns. Prints one line per case.
-//   node dev/life-violence.mjs [--seed N] [--grains G]
+//   node dev/life-violence.mjs [--seed N] [--only substring] [--set key=value,...]
 import { bus } from '../src/core/bus.js';
 import { run } from './life-sim.mjs';
+import { TUNE } from '../src/sim/life.js';
 
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf('--' + k); return i >= 0 ? args[i + 1] : d; };
 const SEED = +opt('seed', 7);
+// --set clingCalm=0.8,throwBase=0.9 : try other numbers without editing life.js
+for (const kv of (opt('set', '') || '').split(',').filter(Boolean)) { const [k, v] = kv.split('='); if (k in TUNE) TUNE[k] = +v; else console.log('unknown TUNE key', k); }
+const ONLY = opt('only', '');
 
 const WANDER = ['4.6+', '3.7-', '5.6-', '2.7+'];
 const cases = [
@@ -22,6 +26,7 @@ const cases = [
 ];
 
 for (const [name, tail] of cases) {
+  if (ONLY && !name.includes(ONLY)) continue;
   const clingAt = new Map();
   const holds = [];
   let fellIds = [];

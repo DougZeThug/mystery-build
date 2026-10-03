@@ -149,7 +149,7 @@ void main() {
   float corner = smoothstep(1.08, 1.38, length(p));
   float edgeB = smoothstep(0.80, 0.99, rim) * 0.7 + corner * 0.5;
   float colony = fbm(p * 1.9 + vec2(13.1, 4.7) + uSeed);
-  float allow = smoothstep(0.60, 0.74, colony + 0.10 * tarn + 0.16 * edgeB);
+  float allow = smoothstep(0.58, 0.72, colony + 0.10 * tarn + 0.22 * edgeB);
   vec2 w = vec2(fbm(p * 8.0 + 1.7), fbm(p * 8.0 - 4.2));
   float pit = vnoise(p * 70.0) * 0.6 + vnoise(p * 170.0) * 0.4;
   float grow = fbm(p * 17.0 + w * 1.3 + 8.0) + (pit - 0.5) * 0.26 + (br - 0.5) * 0.10;
@@ -245,8 +245,8 @@ const vec3 SAND_SHD = vec3(0.258, 0.198, 0.125);   // #8b7b63
 const vec3 GOLD = vec3(1.0, 0.604, 0.133);         // #ffcc66
 const vec3 SEAM = vec3(1.0, 0.70, 0.34);           // kintsugi glow
 const vec3 PHOS = vec3(0.27, 1.0, 0.63);           // #8fffd0
-const vec3 VERD = vec3(0.050, 0.064, 0.054);       // old verdigris, greyed by a century of dust
-const vec3 VERD_CRUST = vec3(0.092, 0.112, 0.096);
+const vec3 VERD = vec3(0.052, 0.068, 0.050);       // old verdigris, greyed by a century of dust
+const vec3 VERD_CRUST = vec3(0.094, 0.118, 0.088);
 const float BRUSH_ANG = 0.11;
 
 float sdBox(vec2 q, vec2 b, float r) {
@@ -272,8 +272,8 @@ float sdHex(vec2 p, float r) {        // r = inradius (flat-to-centre)
 float pool(vec2 css) {
   float d = length(css - uAim) / (uPlate.z * 2.0);            // in plate widths
   float core = exp(-d * d * 6.2);
-  float skirt = exp(-d * d * 2.4);
-  return (0.82 * core + 0.18 * skirt) * (1.0 - smoothstep(0.62, 1.18, d));
+  float skirt = exp(-d * d * 1.9);
+  return (0.78 * core + 0.22 * skirt) * (1.0 - smoothstep(0.66, 1.2, d));
 }
 
 void main() {
@@ -402,9 +402,9 @@ void main() {
     float TH = dot(T, H);
     // lobes sized for a lamp 1.6 plate-widths up: a tight hotspot, a soft sheen, the brushed streak.
     // Bronze reflects its own warm colour: copper-amber, never lemon.
-    float hot = pow(NdH, mix(200.0, 600.0, 1.0 - rough)) * mix(0.2, 0.55, 1.0 - rough);
-    float sheen = pow(NdH, 40.0) * 0.06;
-    float aniso = pow(sqrt(max(0.0, 1.0 - TH * TH)), mix(400.0, 1400.0, 1.0 - rough)) * pow(NdH, 36.0) * 0.5;
+    float hot = pow(NdH, mix(200.0, 600.0, 1.0 - rough)) * mix(0.17, 0.48, 1.0 - rough);
+    float sheen = pow(NdH, 40.0) * 0.05;
+    float aniso = pow(sqrt(max(0.0, 1.0 - TH * TH)), mix(400.0, 1400.0, 1.0 - rough)) * pow(NdH, 36.0) * 0.42;
     vec3 specCol = mix(alb * 2.6, vec3(0.58, 0.32, 0.14), 0.32) * (1.0 - pat * 0.9) + vec3(0.03, 0.02, 0.012) * pol;
     vec3 Ed = lampCol * E * sandShadow * dampSh;
 
