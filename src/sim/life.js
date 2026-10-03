@@ -31,7 +31,7 @@ export const TUNE = {
   songWaver: 0.08,      // ...but the plate's own song wavers: chance a song-born singer is a neighbouring mode
   songCrowd: 48,        // and it quickens mostly when the plate is sparse (rate × (1 - N/songCrowd)^1.5)
   gestation: 23,        // seconds of strong, coherent song to quicken a singer of a new mode
-  gestationFew: 17,     // ...while fewer than earlyKinds species are known (the first minutes)
+  gestationFew: 17,     // ...from the plate's own song while fewer than earlyKinds species are known
   driveGestation: 11,   // ...and while the player holds that mode (bow, fork, phonograph) at full strength
   familiar: 2.6,        // a mode whose species is already alive quickens this much faster
   // the player's own note quickens by intent, not loudness: its strength is
@@ -1117,7 +1117,7 @@ export function createLife(game) {
   let GHOST_SHARE = 0, GHOST_DRIVE = 0;
   function findGhost(dt) {
     const src = drivenNow && field.getSource ? field.getSource('phono') : null;
-    let best = null, bestMin = 0;
+    let best = null, bestMin = 0, bestDrive = 0;
     if (src && src.length) {
       let top = 0;
       for (const c of src) if (c.amp > top) top = c.amp;
@@ -1132,7 +1132,7 @@ export function createLife(game) {
           if (a < mn) mn = a;
           a2 += a * a;
         }
-        if (mn > 0 && (!best || r.comps.length > best.comps.length || (r.comps.length === best.comps.length && mn > bestMin))) { best = r; bestMin = mn; GHOST_DRIVE = Math.sqrt(a2); }
+        if (mn > 0 && (!best || r.comps.length > best.comps.length || (r.comps.length === best.comps.length && mn > bestMin))) { best = r; bestMin = mn; bestDrive = Math.sqrt(a2); }
       }
     }
     if (best !== ghostRec) { ghostRec = best; ghostT = 0; }
@@ -1140,6 +1140,7 @@ export function createLife(game) {
     let s2 = 0;
     for (const cm of best.comps) { const a = field.amp ? field.amp(cm) : 0; s2 += a * a; }
     GHOST_SHARE = field.total > 1e-3 ? s2 / (field.total * field.total) : 0;
+    GHOST_DRIVE = bestDrive;                         // its voices together, as the wax plays them
     ghostT = GHOST_SHARE > TUNE.birthShare ? ghostT + dt : 0;
     return best;
   }
