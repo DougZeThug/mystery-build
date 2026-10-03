@@ -95,7 +95,13 @@ export function createRenderer(canvas, game) {
     let lost = false;
     let W = 0, H = 0, matSize = 0, ckSize = 0, enSize = 0;
     // internal resolution of the scene (bloom follows); drops a step if the GPU cannot keep up
-    let scale = 1, sceneW = 0, sceneH = 0, lastNow = 0, frameEma = 16.7, slowFor = 0, fastFor = 0;
+    let scale = 1, sceneW = 0, sceneH = 0;
+    // frame pacing (see adapt): GPU timer queries when offered, else the frame interval
+    let tq = null;
+    const queries = [], inFlight = [];
+    const ivRing = new Float32Array(96), ivSort = new Float32Array(96);
+    let ivN = 0, ivI = 0;
+    const pace = { last: 0, refresh: 16.7, ivEma: 16.7, gpu: -1, gpuN: 0, stale: 0, slowFor: 0, fastFor: 0, wait: 8, upAt: -1e9, open: false, pinned: 0 };
     let hdrFmt = null;
     let aniso = null;
     const modeCols = modeColourTable();
@@ -168,6 +174,8 @@ export function createRenderer(canvas, game) {
     function init() {
       lost = false;
       if (gl.getExtension('EXT_color_buffer_float')) hdrFmt = { internal: gl.RGBA16F, format: gl.RGBA, type: gl.HALF_FLOAT };
+      tq = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+      queries.length = 0; inFlight.length = 0; pace.gpu = -1; pace.gpuN = 0; pace.stale = 0; pace.last = 0; pace.open = false;
       aniso = gl.getExtension('EXT_texture_filter_anisotropic');
       gl.getExtension('OES_texture_float_linear');
 
@@ -583,6 +591,11 @@ export function createRenderer(canvas, game) {
       if ((canvas.width | 0) !== W || (canvas.height | 0) !== H) resize();
       const t0 = performance.now();
       adapt(t0);
+      const timing = timerBegin();
+      try { drawFrame(v, t0); } finally { if (timing) gl.endQuery(tq.TIME_ELAPSED_EXT); }
+    }
+
+    function drawFrame(v, t0) {
       const t = num(game.t), dt = Math.min(0.1, Math.max(0, t - lastT));
       lastT = t;
       const Lt = game.light || {}, fx = game.fx || {};
@@ -703,7 +716,7 @@ export function createRenderer(canvas, game) {
       gl.uniform2f(Pc.u.uAim, ax, ay);
       gl.uniform1f(Pc.u.uWarm, 0.32 * warm);
       gl.uniform4f(Pc.u.uFirst, first ? first.u : 0, first ? first.v : 0, Math.max(0, fbt - 0.95),
-        fbt > 0.95 && fbt < 6 ? 0.7 * (1 - smooth(4, 6, fbt)) : 0);
+        fbt > 0.95 && fbt < 6 ? 0.85 * (1 - smooth(4, 6, fbt)) : 0);
       if (Pc.u.uDamp) gl.uniform4fv(Pc.u.uDamp, dampArr);
       bind(0, T.matA); bind(1, T.matB); bind(2, T.felt); bind(3, T.field); bind(4, T.sand);
       bind(5, T.wear); bind(6, T.crack); bind(7, T.engr); bind(8, R.lm.tex);
@@ -780,21 +793,85 @@ export function createRenderer(canvas, game) {
       info.ms = info.ms * 0.95 + (performance.now() - t0) * 0.05;
     }
 
-    // Frame pacing: if frames run long for a couple of seconds, render the scene at a lower internal
-    // resolution (0.85, then 0.7; the composite upsamples); climb back when there is headroom.
+    // Frame pacing: when the GPU cannot keep up, render the scene at a lower internal resolution
+    // (0.85, then 0.7; the composite upsamples), and climb back when there is room again.
+    // The measure is the GPU's own time for these passes (timer queries) where the browser offers
+    // it, else the frame interval against the display's own refresh period. Neither counts the
+    // frames main.js leaves out (it draws every other frame behind the open notebook), and a
+    // browser that runs rAF at 30 Hz with an idle GPU is throttling, not slowness.
+    function timerBegin() {
+      if (!tq) return false;
+      // collect the oldest finished measurement (results arrive a frame or two late)
+      if (inFlight.length && gl.getQueryParameter(inFlight[0], gl.QUERY_RESULT_AVAILABLE)) {
+        const q = inFlight.shift();
+        if (gl.getParameter(tq.GPU_DISJOINT_EXT)) { queries.push(...inFlight.splice(0)); pace.stale = 0; }
+        else if (pace.stale > 0) pace.stale--;                // measured at the previous resolution
+        else {
+          const ms = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6;
+          pace.gpu = pace.gpu < 0 ? ms : pace.gpu + (ms - pace.gpu) * 0.1;
+          pace.gpuN++;
+        }
+        queries.push(q);
+      }
+      if (inFlight.length >= 4) return false;
+      const q = queries.pop() || gl.createQuery();
+      if (!q) return false;
+      gl.beginQuery(tq.TIME_ELAPSED_EXT, q);
+      inFlight.push(q);
+      return true;
+    }
+
     function adapt(now) {
-      let dtm = lastNow ? now - lastNow : 16.7;
-      lastNow = now;
-      if (dtm <= 0 || dtm > 1000) return;              // a hidden tab, or the first frame
-      // a lone hitch barely moves the average; a device that is simply slow keeps it high
-      const dts = Math.min(dtm, 500) / 1000;
-      dtm = Math.min(dtm, 120);
-      frameEma += (dtm - frameEma) * 0.05;
-      if (frameEma > 21) { slowFor += dts; fastFor = 0; } else if (frameEma < 13.5) { fastFor += dts; slowFor = 0; } else { slowFor = 0; fastFor = 0; }
+      const P = pace;
+      const open = !!game.journal?.isOpen;
+      const dtm = P.last ? now - P.last : 0;
+      P.last = now;
+      if (open !== P.open) { P.open = open; P.slowFor = 0; P.fastFor = 0; return; }
+      // behind the notebook the scene is only breathing; a stall or a hidden tab says nothing
+      if (open || P.pinned || !(dtm > 0) || dtm > 250) return;
+      const useGpu = !!tq && P.gpuN > 0;                 // a timer that never reports: fall back
+      const gpu = useGpu ? P.gpu : -1;
+      if (gpu < 0 || gpu < dtm * 0.5) learnRefresh(dtm);
+      P.ivEma += (Math.min(dtm, 100) - P.ivEma) * 0.05;
+      if (useGpu && gpu < 0) return;                     // fresh measurements after a change of scale
+      const dts = dtm / 1000;
+      const up = scale < 0.8 ? 0.85 : 1;
+      let slow, fast;
+      if (useGpu) {
+        slow = gpu > P.refresh * 0.85;
+        fast = gpu * (up / scale) * (up / scale) < P.refresh * 0.6;   // cost follows the pixel count
+      } else {
+        slow = P.ivEma > P.refresh * 1.3;
+        fast = P.ivEma < P.refresh * 1.1;
+      }
+      P.slowFor = slow ? P.slowFor + dts : 0;
+      P.fastFor = fast && !slow ? P.fastFor + dts : 0;
       let next = scale;
-      if (slowFor > 2.5 && scale > 0.71) next = scale > 0.9 ? 0.85 : 0.7;
-      else if (fastFor > 8 && scale < 0.99) next = scale < 0.8 ? 0.85 : 1;
-      if (next !== scale) { scale = next; slowFor = 0; fastFor = 0; info.scale = scale; resize(); }
+      if (P.slowFor > 2.5 && scale > 0.71) {
+        next = scale > 0.9 ? 0.85 : 0.7;
+        // a step up that did not hold: wait longer before the next try (8 s, 16 s ... 2 min)
+        if (now - P.upAt < 6000) P.wait = Math.min(120, P.wait * 2);
+      } else if (P.fastFor > (useGpu ? 5 : P.wait) && scale < 0.99) {
+        next = up;
+        P.upAt = now;
+      }
+      if (next !== scale) setScale(next);
+    }
+    // The display's refresh period: the lower quartile of recent frame intervals (a burst of
+    // catch-up frames or a hitch cannot move it), quick to fall and slow to rise, so a 30 Hz cap is
+    // learnt in several seconds. Not learnt from frames the GPU was busy for (see adapt).
+    function learnRefresh(dtm) {
+      ivRing[ivI] = dtm; ivI = (ivI + 1) % ivRing.length;
+      if (ivN < ivRing.length) ivN++;
+      if (ivN < 24 || ivI % 24) return;
+      ivSort.set(ivRing);
+      const q = ivSort.subarray(0, ivN).sort()[ivN >> 2];
+      const P = pace;
+      P.refresh = Math.min(50, Math.max(4, q < P.refresh ? q : P.refresh + (q - P.refresh) * 0.12));
+    }
+    function setScale(s) {
+      scale = s; pace.slowFor = 0; pace.fastFor = 0; pace.gpu = -1; pace.stale = inFlight.length; info.scale = scale;
+      resize();
     }
 
     function singerUniforms(Ps, cx, cy, unit, lx, ly, lz, t, dpr, level, choir) {
@@ -819,6 +896,8 @@ export function createRenderer(canvas, game) {
 
     init();
     api.resize = resize;
+    // harnesses: hold the scene at one internal resolution (0 = adapt again)
+    api.pinScale = (x) => { pace.pinned = +x > 0 ? Math.min(1, Math.max(0.5, +x)) : 0; if (pace.pinned) setScale(pace.pinned); };
     api.render = () => { try { render(); } catch (e) { reportOnce(e); } };
   }
 
