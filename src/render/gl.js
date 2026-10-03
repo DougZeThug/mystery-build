@@ -23,6 +23,7 @@ const MAX_SINGERS = 64;
 const MIN_SINGER_PX = 9;      // singers are drawn no smaller than about this radius (CSS px)
 const BIRTH_SECS = 5;         // how long a birth's light lasts (see birthGlow in shaders.js)
 const EN_MAX = 2048;          // engraving texture size cap
+const LDR_THRESH = 0.62;      // bloom threshold when the scene cannot hold values above 1
 
 // Canonical singer state codes and flag bits as the shaders read them. life.js owns the real
 // encoding (STATES / FLAG); instance data is remapped to these names every frame, so a reordered
@@ -76,7 +77,7 @@ export function createRenderer(canvas, game) {
   };
   let debugMode = 0;
   let engravingsDirty = true;
-  const info = { hdr: false, matSize: 0, ckSize: 0, frames: 0, ms: 0, scale: 1 };
+  const info = { hdr: false, fmt: '', matSize: 0, ckSize: 0, frames: 0, ms: 0, scale: 1 };
 
   if (!gl) return createFallback(canvas, game, api);
   try {
@@ -103,7 +104,8 @@ export function createRenderer(canvas, game) {
     const ivRing = new Float32Array(96), ivSort = new Float32Array(96);
     let ivN = 0, ivI = 0;
     const pace = { last: 0, refresh: 16.7, ivEma: 16.7, gpu: -1, gpuN: 0, stale: 0, slowFor: 0, fastFor: 0, wait: 8, upAt: -1e9, open: false, pinned: 0 };
-    let hdrFmt = null;
+    // render target formats, best first (see init)
+    let rtFmts = [], rtFmt = null;
     let aniso = null;
     const modeCols = modeColourTable();
 
@@ -175,7 +177,16 @@ export function createRenderer(canvas, game) {
 
     function init() {
       lost = false;
-      if (gl.getExtension('EXT_color_buffer_float')) hdrFmt = { internal: gl.RGBA16F, format: gl.RGBA, type: gl.HALF_FLOAT };
+      // Scene, bloom and light map hold linear light. Half float when it is renderable (either
+      // extension); else sRGB8, core in WebGL2, which stores linear light with perceptual precision
+      // (plain RGBA8 posterises the dark felt into bands) and decodes when sampled; RGBA8 last.
+      rtFmts = [];
+      if (gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float')) {
+        rtFmts.push({ internal: gl.RGBA16F, format: gl.RGBA, type: gl.HALF_FLOAT, kind: 'half' });
+      }
+      rtFmts.push({ internal: gl.SRGB8_ALPHA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE, kind: 'srgb' },
+        { internal: gl.RGBA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE, kind: 'rgba8' });
+      rtFmt = rtFmts[0];
       tq = gl.getExtension('EXT_disjoint_timer_query_webgl2');
       queries.length = 0; inFlight.length = 0; pace.gpu = -1; pace.gpuN = 0; pace.stale = 0; pace.last = 0; pace.open = false;
       aniso = gl.getExtension('EXT_texture_filter_anisotropic');
@@ -235,7 +246,7 @@ export function createRenderer(canvas, game) {
       fieldVer = -1; fieldG = 0; sandVer = -1; sandD = 0; wearVer = -1; ckSig = NaN; engravingsDirty = true; engr.baked = false;
       W = 0; H = 0; sceneW = 0; sceneH = 0; matSize = 0; ckSize = 0; enSize = 0;
 
-      R.lm = target(LM_SIZE, LM_SIZE, hdrFmt);
+      R.lm = target(LM_SIZE, LM_SIZE);
       bakeFelt();
       resize();
     }
@@ -279,8 +290,8 @@ export function createRenderer(canvas, game) {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
       return t;
     }
-    function target(w, h, fmt) {
-      const f = fmt || { internal: gl.RGBA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE };
+    function target(w, h) {
+      const f = rtFmt;
       const t = tex(w, h, f.internal, f.format, f.type, null);
       const fb = gl.createFramebuffer();
       gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
@@ -289,8 +300,10 @@ export function createRenderer(canvas, game) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       if (!ok) {
         gl.deleteFramebuffer(fb); gl.deleteTexture(t);
-        if (fmt) { hdrFmt = null; return target(w, h, null); }     // half float not renderable here
-        throw new Error('framebuffer incomplete');
+        const next = rtFmts[rtFmts.indexOf(f) + 1];         // not renderable here after all
+        if (!next) throw new Error('framebuffer incomplete');
+        rtFmt = next;
+        return target(w, h);
       }
       return { tex: t, fb, w, h };
     }
@@ -358,12 +371,12 @@ export function createRenderer(canvas, game) {
       if (sw !== sceneW || sh !== sceneH) {
         sceneW = sw; sceneH = sh;
         for (const k of ['scene', 'a1', 'a2', 'b1', 'b2']) freeTarget(R[k]);
-        R.scene = target(sceneW, sceneH, hdrFmt);
+        R.scene = target(sceneW, sceneH);
         const aw = Math.max(1, Math.ceil(sceneW / 4)), ah = Math.max(1, Math.ceil(sceneH / 4));
         const bw = Math.max(1, Math.ceil(sceneW / 8)), bh = Math.max(1, Math.ceil(sceneH / 8));
-        R.a1 = target(aw, ah, hdrFmt); R.a2 = target(aw, ah, hdrFmt);
-        R.b1 = target(bw, bh, hdrFmt); R.b2 = target(bw, bh, hdrFmt);
-        info.hdr = !!hdrFmt;
+        R.a1 = target(aw, ah); R.a2 = target(aw, ah);
+        R.b1 = target(bw, bh); R.b2 = target(bw, bh);
+        info.hdr = rtFmt.kind === 'half'; info.fmt = rtFmt.kind;
       }
       const platePx = v ? v.plate.size * v.dpr : 1000;
       const ms = platePx > 1100 ? 2048 : 1024;
@@ -813,7 +826,7 @@ export function createRenderer(canvas, game) {
       // --- bloom ---
       gl.useProgram(P.bright.p);
       gl.uniform2f(P.bright.u.uTexel, 1 / sceneW, 1 / sceneH);
-      gl.uniform1f(P.bright.u.uThresh, (hdrFmt ? 1.25 : 0.62) - 0.3 * choir - 0.1 * floorFx);
+      gl.uniform1f(P.bright.u.uThresh, (rtFmt.kind === 'half' ? 1.25 : LDR_THRESH) - 0.3 * choir - 0.1 * floorFx);
       bind(0, R.scene.tex);
       drawFull(R.a1);
       gl.useProgram(P.blur.p);
