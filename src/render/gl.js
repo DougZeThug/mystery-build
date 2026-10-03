@@ -926,6 +926,7 @@ export function createRenderer(canvas, game) {
         slow = P.ivEma > P.refresh * 1.3;
         fast = P.ivEma < P.refresh * 1.1;
       }
+      if (P.upAt > P.downAt && now - P.upAt > 10000) P.wait = 8;   // a step up that held: forget the back-off
       P.slowFor = slow ? P.slowFor + dts : 0;
       P.fastFor = fast && !slow ? P.fastFor + dts : 0;
       let next = scale;

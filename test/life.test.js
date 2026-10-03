@@ -596,11 +596,11 @@ test('resting finger gathers singers', () => {
   g.life.destroy();
 });
 
-test('simulateOffline on a slow device: the whole absence is lived, coarsely; nobody is wiped out; counts and tallies agree', () => {
+test('simulateOffline on a slow device: steps stay short, nobody is wiped out, counts and tallies agree', () => {
   const budget = TUNE.offlineBudget;
   try {
-    for (const seed of [21, 22]) {
-      TUNE.offlineBudget = 0.01;                 // as if the device could spare no time at all
+    for (const [seed, slow] of [[21, false], [22, true]]) {
+      TUNE.offlineBudget = slow ? 0.01 : 1e9;   // as if the device could spare no time at all
       const g = makeGame(seed);
       const ids = ['1.2+', '1.3-', '2.4+', '1.2-'];
       for (let i = 0; i < 24; i++) g.life.spawn([ids[i % 4]], -0.7 + (i % 6) * 0.28, -0.6 + Math.floor(i / 6) * 0.35, 0.8, { silent: true });
@@ -624,10 +624,17 @@ test('simulateOffline on a slow device: the whole absence is lived, coarsely; no
       const words = notes.map((n) => n.text).join(' ');
       assert.ok(words.includes(`numbered ${numberWordOf(leaving)} when you left`) || words.includes('unchanged'), words);
       assert.ok(!/None remain/.test(words), words);
-      // the room's tallies include what happened while it was empty
-      assert.ok(g.state.stats.deaths > stats0.deaths + 20 && g.state.stats.splits > stats0.splits + 20, JSON.stringify(g.state.stats));
-      assert.ok(g.state.stats.maxPop >= living.length);
+      // the room's tallies include what happened while it was empty (here, the one crumbling)
+      assert.ok(g.state.stats.deaths >= stats0.deaths + 1 && g.state.stats.maxPop >= living.length, JSON.stringify(g.state.stats));
       assert.equal(g.state.seen.firstGold, true);
+      if (slow) {
+        // what did not fit was left unlived (nobody aged through it), and the notes say so
+        assert.ok(g.life.motes.every((m) => m.keeper || m.age < m.life), 'someone outlived their span');
+        assert.match(words, /seem to have rested/);
+      } else {
+        assert.ok(g.state.stats.deaths > stats0.deaths + 20 && g.state.stats.splits > stats0.splits + 20, JSON.stringify(g.state.stats));
+        assert.match(words, /generations passed/);
+      }
       g.life.destroy();
     }
   } finally { TUNE.offlineBudget = budget; }
@@ -665,7 +672,7 @@ test('simulateOffline: quick, sane, and writes field notes', () => {
   const t0 = performance.now();
   const notes = g.life.simulateOffline(3 * 3600);
   const ms = performance.now() - t0;
-  assert.ok(ms < 150, `offline took ${ms.toFixed(0)} ms`);
+  assert.ok(ms < TUNE.offlineBudget + 100, `offline took ${ms.toFixed(0)} ms`);
   assert.ok(Array.isArray(notes) && notes.length >= 1);
   for (const n of notes) { assert.equal(typeof n.text, 'string'); assert.ok(!n.text.includes('!')); assert.ok(n.kind); }
   for (const m of g.life.motes) assert.ok(finite(m));

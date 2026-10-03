@@ -86,9 +86,12 @@ export const TUNE = {
   choirMin: 3, choirPop: 12, choirCons: 0.1, choirHold: 5, choirLen: 34, choirCool: 600, choirBreak: 3,
   floorKs: [5, 10, 20, 40], floorHold: 6, floorCool: 150,
   dreams: true,         // life drives sand.setDream() in darkness (extinct figures); false to leave it to others
-  // time away: the coarse evolution fits this many ms of compute, lengthening its step (up to
-  // offlineMaxStep seconds) on a slow device rather than skipping time
-  offlineBudget: 85, offlineMaxStep: 120,
+  // time away: the coarse evolution may take this many ms of compute (it runs once, under the fade
+  // from black or behind a hidden tab), lengthening its step on a slow device only up to
+  // offlineMaxStep seconds: longer steps let a whole plate split at once and then starve together
+  // (a quarter of 3-hour absences ended empty at 120 s steps; none at 20). Whatever still does not
+  // fit is left unlived: the plate rested.
+  offlineBudget: 250, offlineMaxStep: 20,
 };
 
 const TAU = Math.PI * 2;
@@ -1663,9 +1666,9 @@ export function createLife(game) {
   }
 
   // --- time away: a coarse, sand-free evolution -----------------------------------------------
-  // Steps of 5-15 s; on a slow device the step lengthens (up to offlineMaxStep) so the whole span
-  // still fits the budget. Energy is integrated exactly over a step, so a long step is coarse, not
-  // wrong: no stretch of the absence is ever skipped or lived on age alone.
+  // Steps of 5-15 s (energy integrated exactly over each); on a slow device the step lengthens a
+  // little (to offlineMaxStep) to fit the budget, and if even that does not fit, the rest of the
+  // absence is left unlived rather than lived on age alone: nobody dies of a slow device.
   function simulateOffline(seconds) {
     const clock = typeof performance !== 'undefined' ? performance : Date;
     const t0 = clock.now();
@@ -1688,11 +1691,13 @@ export function createLife(game) {
     for (const m of motes) if (!m.keeper) startAlive.add(m.spec);
     const born = new Set(), lost = new Set();
     const nowMs = Date.now();
-    let dt = secs > 3600 ? 15 : secs > 900 ? 10 : 5, simT = 0, steps = 0;
+    let dt = Math.min(secs > 3600 ? 15 : secs > 900 ? 10 : 5, TUNE.offlineMaxStep), simT = 0, steps = 0, rested = 0;
     while (simT < secs - 1e-6) {
       if (steps >= 4) {                               // a slow device: fit what is left into the budget
-        const spent = clock.now() - t0, room = (TUNE.offlineBudget - spent) / (spent / steps);
-        dt = clamp(room >= 1 ? (secs - simT) / room : TUNE.offlineMaxStep, dt, TUNE.offlineMaxStep);
+        const spent = clock.now() - t0;
+        if (spent > TUNE.offlineBudget) { rested = secs - simT; break; }
+        const room = (TUNE.offlineBudget - spent) / (spent / steps);
+        dt = clamp((secs - simT) / Math.max(1, room), dt, Math.max(dt, TUNE.offlineMaxStep));
       }
       const h = Math.min(dt, secs - simT);
       const agoMs = (secs - simT) * 1000;            // how long before the return this step began
@@ -1774,8 +1779,8 @@ export function createLife(game) {
         }
       }
       compactMotes();
-      peak = Math.max(peak, livingCount());
       aggregate();
+      peak = Math.max(peak, N);
       for (const sp of alive) { const r = recordFor(sp); r.count = sp.n; if (sp.n > r.peak) r.peak = sp.n; }
     }
     // reconcile records
@@ -1813,7 +1818,7 @@ export function createLife(game) {
 
     // the field notes
     const mins = Math.round(secs / 60);
-    const gens = Math.floor(secs / 340);
+    const gens = Math.floor((secs - rested) / 340);
     const endCount = livingCount();
     let lead;
     if (!startCount && !endCount) {
@@ -1824,6 +1829,7 @@ export function createLife(game) {
     else if (gens === 1) lead = 'While you were away: a generation passed.';
     else lead = `While you were away the plate sang to itself for ${timeWords(secs)}.`;
     if (dark && startCount) lead += ' The lamp was out; they slept through most of it.';
+    else if (rested >= 600 && endCount) lead += ` For the last ${timeWords(rested)} they seem to have rested.`;
     notes.push({ kind: 'away', text: lead });
     if (startCount || endCount) {
       if (!endCount) notes.push({ kind: 'away', text: keeperMote ? 'None remain but the pale one, who walks the rim as before.' : 'None remain. The sand lies where the last of them crumbled.' });
