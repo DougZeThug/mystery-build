@@ -30,7 +30,9 @@ export const SAND_TUNING = Object.freeze({
   DRAIN_MAX: 30,      // grains per second per unhealed crack (branches share their parent's), at most
   LODGE_D: 0.015,     // gold this close to an unhealed crack lodges
   GILD_LEN: 0.03,     // crack length (units) one lodged gold grain gilds
-  GILD_SPREAD: 0.03,  // ... spread along the crack over ± this arc length
+  GILD_SPREAD: 0.03,  // ... spread along the crack over ± this arc length; what a full stretch cannot
+                      // hold runs on along the seam into the nearest gaps
+  HEAL_AT: 0.9,       // a crack heals once this share of its length is gilded
   SORT_EVERY: 1.5,    // re-order grains by cell this often (s) for memory locality; 0 = never
   SETTLE_V: 0.02,     // grains slower than this are stepped at half rate (2·dt); 0 = off
   DREAM_RATE: 0.3,    // drift of a dreaming plate relative to a singing one (with heavy friction)
@@ -56,7 +58,7 @@ const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a
 export function createSand(field, { cap = 26000, D = 256, state = null, bus = null, seed = 1234567, tuning = null } = {}) {
   const T = Object.assign({}, SAND_TUNING, tuning || {});
   const { A_SLEEP, DRIVE, J_ANTI, J_BASE, PRESS, GAMMA, GAMMA_STILL, VMAX, GOLD_MOB, GOLD_KICK, DANCER, EDGE_HOLD,
-    DRAIN_RATE, DRAIN_MAX, LODGE_D, GILD_LEN, GILD_SPREAD, SORT_EVERY, SETTLE_V, DREAM_RATE, DREAM_HUSH, LINE_W } = T;
+    DRAIN_RATE, DRAIN_MAX, LODGE_D, GILD_LEN, GILD_SPREAD, HEAL_AT, SORT_EVERY, SETTLE_V, DREAM_RATE, DREAM_HUSH, LINE_W } = T;
   cap = Math.max(1, Math.min(200000, Math.round(finite(cap, 26000))));
   D = Math.max(16, Math.min(1024, Math.round(finite(D, 256))));
   const DD = D * D;
@@ -497,34 +499,46 @@ export function createSand(field, { cap = 26000, D = 256, state = null, bus = nu
     }
   }
 
-  // Gold lodges into crack `ci` near (px,py): gilds ±GILD_SPREAD of arc length; may heal the crack.
+  // Gold lodges into crack `ci` near (px,py): it gilds GILD_LEN of crack length, spread over
+  // ±GILD_SPREAD of arc length; what full segments cannot take flows on along the crack into the
+  // nearest unfilled segments either way (molten gold finds the gaps, the rim end included).
+  // The crack heals once HEAL_AT of its length is gilded.
   function lodge(i, ci, px, py) {
     const crack = state?.plate?.cracks?.[ci];
     if (!crack || crack.healed || !crack.pts || crack.pts.length < 2) return false;
     nearestSegment(px, py, crack.pts, seg);
     if (seg.dist > LODGE_D) return false;
     const geo = geometry(crack);
-    const g = crack.gold;
-    const s0 = geo.cum[seg.index] + seg.t * geo.len[seg.index];
+    const g = crack.gold, len = geo.len, cum = geo.cum, n = geo.n;
+    const s0 = cum[seg.index] + seg.t * len[seg.index];
+    const mid = (k) => cum[k] + len[k] * 0.5;
+    // add `amt` (crack length) to segment k; returns what it could not hold
+    const fill = (k, amt) => {
+      const room = (1 - (g[k] || 0)) * len[k];
+      if (amt < room) { g[k] = (g[k] || 0) + amt / len[k]; return 0; }
+      g[k] = 1;
+      return amt - Math.max(0, room);
+    };
     // triangular weights at segment midpoints within the spread
     let wsum = 0;
     let lo = seg.index, hi = seg.index;
-    while (lo > 0 && s0 - geo.cum[lo] < GILD_SPREAD) lo--;
-    while (hi < geo.n - 1 && geo.cum[hi + 1] - s0 < GILD_SPREAD) hi++;
-    for (let k = lo; k <= hi; k++) {
-      const mid = geo.cum[k] + geo.len[k] * 0.5;
-      wsum += Math.max(0.05, 1 - Math.abs(mid - s0) / GILD_SPREAD) * geo.len[k];
+    while (lo > 0 && s0 - cum[lo] < GILD_SPREAD) lo--;
+    while (hi < n - 1 && cum[hi + 1] - s0 < GILD_SPREAD) hi++;
+    for (let k = lo; k <= hi; k++) wsum += Math.max(0.05, 1 - Math.abs(mid(k) - s0) / GILD_SPREAD) * len[k];
+    let spill = wsum > 0 ? 0 : GILD_LEN;
+    if (wsum > 0) for (let k = lo; k <= hi; k++) {
+      spill += fill(k, (GILD_LEN * Math.max(0.05, 1 - Math.abs(mid(k) - s0) / GILD_SPREAD) * len[k]) / wsum);
     }
-    for (let k = lo; k <= hi; k++) {
-      const mid = geo.cum[k] + geo.len[k] * 0.5;
-      const w = (Math.max(0.05, 1 - Math.abs(mid - s0) / GILD_SPREAD) * geo.len[k]) / (wsum || 1);
-      g[k] = Math.min(1, (g[k] || 0) + (GILD_LEN * w) / Math.max(1e-4, geo.len[k]));
+    // the overflow runs along the seam, nearest segments first, in both directions
+    for (let l = seg.index, r = seg.index + 1; spill > 1e-7 && (l >= 0 || r < n);) {
+      const k = r >= n || (l >= 0 && s0 - mid(l) <= mid(r) - s0) ? l-- : r++;
+      if (!(g[k] >= 1)) spill = fill(k, spill);
     }
     sand.removeAt(i);
     sand.lodged++;
-    let full = true;
-    for (let k = 0; k < g.length; k++) if (!(g[k] >= 0.999)) { full = false; break; }
-    if (full) {
+    let gilt = 0;
+    for (let k = 0; k < n; k++) gilt += Math.min(1, g[k] || 0) * len[k];
+    if (gilt >= HEAL_AT * cum[n] - 1e-9) {
       for (let k = 0; k < g.length; k++) g[k] = 1;
       crack.healed = true;
       bus?.emit('plate:heal', { crack: ci });

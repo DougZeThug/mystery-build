@@ -243,8 +243,8 @@ test('a dreaming plate: sand creeps into a silent figure over about a minute', (
   for (let i = 0; i < 300; i++) ghost.update(1 / 60);
   const start = nodalDistance(ghost, w.sand);
   w.sand.setDream([{ mode: '3.4-', amp: 0.6 }]);
-  assert.ok(w.sand.dreaming);
   step(w, 10);
+  assert.ok(w.sand.dreaming && w.sand.dreamTime > 9, `dreaming ${w.sand.dreaming}, ${w.sand.dreamTime} s`);
   const early = nodalDistance(ghost, w.sand);
   assert.ok(early.med > 0.02, 'slow: no figure after 10 s');
   step(w, 80);
@@ -255,7 +255,34 @@ test('a dreaming plate: sand creeps into a silent figure over about a minute', (
   // the real plate takes over whenever it sings; waking ends the dream
   w.sand.setDream(null);
   step(w, 1);
-  assert.ok(w.sand.asleep && !w.sand.dreaming);
+  assert.ok(w.sand.asleep && !w.sand.dreaming && w.sand.dreamTime === 0);
+});
+
+test('a dream outweighs the sleepers\' whisper, however many sing; a real voice wakes it', () => {
+  const w = world(10000);
+  const ghost = createField({});
+  ghost.setSource('g', [{ mode: '3.4-', amp: 0.6 }]);
+  for (let i = 0; i < 300; i++) ghost.update(1 / 60);
+  const start = nodalDistance(ghost, w.sand);
+  // a crowded plate asleep: the bronze carries its whole chorus (≤ 0.9) at darkField 0.06
+  w.field.setSource('chorus', [{ mode: '1.3+', amp: 0.032 }, { mode: '2.4+', amp: 0.032 }, { mode: '1.2-', amp: 0.025 }]);
+  step(w, 3);
+  assert.ok(w.field.total > w.sand.tuning.A_SLEEP && w.field.total < w.sand.tuning.DREAM_HUSH, `whisper ${w.field.total}`);
+  w.sand.setDream([{ mode: '3.4-', amp: 0.6 }]);
+  step(w, 90);
+  assert.ok(w.sand.dreaming, 'the whisper blocked the dream');
+  const late = nodalDistance(ghost, w.sand);
+  assert.ok(late.med < start.med / 4 && late.med < 0.015, `med ${start.med} -> ${late.med}`);
+  // a bow in the dark: the real plate takes the sand back at once, the dream waits under it
+  w.field.setSource('bow', [{ mode: '1.4+', amp: 0.5 }]);
+  step(w, 3);
+  assert.ok(!w.sand.dreaming, 'still dreaming under a bow');
+  const t = w.sand.dreamTime;
+  step(w, 2);
+  assert.equal(w.sand.dreamTime, t, 'dream time ran on while the bow played');
+  w.field.setSource('bow', []);
+  step(w, 8);
+  assert.ok(w.sand.dreaming && w.sand.dreamTime > t, 'the dream did not resume after the bow');
 });
 
 test('performance: 26000 grains (incl. density rebuild)', (t) => {
