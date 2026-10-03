@@ -384,8 +384,8 @@ void main() {
       vec2 fd = pu - uFirst.xy;
       float fr = length(fd);
       float front = uFirst.z * 0.8;
-      shiver = exp(-pow((fr - front) / 0.07, 2.0)) * uFirst.w * exp(-front * 0.9);
-      N.xy += fd / max(fr, 1e-3) * shiver * 0.12 * sin((fr - front) * 70.0);
+      shiver = exp(-pow((fr - front) / 0.09, 2.0)) * uFirst.w * exp(-front * 0.9);
+      N.xy += fd / max(fr, 1e-3) * shiver * 0.05 * sin((fr - front) * 50.0);
     }
 
     // sand (sampled early: it shades the metal around it and hides the engravings)
@@ -881,19 +881,22 @@ void main() {
   }
   vec3 spark = vec3(0.0);                                                   // not faded with the body
   if (born) {                                                               // assembled from sparkles
-    float conv = smoothstep(0.0, 0.8, prog);
-    float fade = smoothstep(0.0, 0.12, prog) * (1.0 - smoothstep(0.75, 1.0, prog));
+    // grains of the sand it is made of, lifted and drawn in on a slow spiral, each in its own time
+    float fade = 1.0 - smoothstep(0.75, 1.0, prog);
     for (int i = 0; i < 14; i++) {
       float fi = float(i);
-      float a = phase * 6.2832 + fi * 2.39996 + prog * 4.0;
-      float rad = mix(3.1, 0.15, conv) * (0.62 + 0.38 * hash11(fi + phase * 17.0));
-      vec2 sp = vec2(cos(a), sin(a)) * rad;
-      vec2 dq = q - sp;
-      spark += mix(cAvg, vec3(1.0, 0.95, 0.85), 0.5) * exp(-dot(dq, dq) * 42.0) * 1.6 * fade;
+      float h1 = hash11(fi + phase * 17.0), h2 = hash11(fi * 3.1 + phase * 5.0);
+      float conv = smoothstep(0.05 + 0.3 * h2, 0.82, prog);
+      float a = phase * 6.2832 + fi * 2.39996 + conv * (2.5 + 2.0 * h1);
+      float rad = mix(1.2 + 1.9 * h1, 0.12, conv);
+      vec2 dq = q - vec2(cos(a), sin(a)) * rad;
+      float tw = 0.6 + 0.4 * sin(uTime * (9.0 + 7.0 * h2) + fi * 2.3);
+      float lift = smoothstep(0.0, 0.1, prog - 0.15 * h2);
+      spark += mix(cAvg, vec3(1.0, 0.92, 0.78), 0.6) * exp(-dot(dq, dq) * (36.0 + 40.0 * h2)) * (0.8 + 0.9 * h1) * tw * lift * fade;
     }
   }
   // the flare as the body forms, settling into the singer's own light
-  col += mix(cHalo, vec3(1.0, 0.95, 0.88), 0.35) * (exp(-d * d * 1.4) * 1.3 + exp(-d * 0.9) * 0.3) * bloom;
+  col += mix(cHalo, vec3(1.0, 0.95, 0.88), 0.35) * (exp(-d * d * 1.4) * 0.9 + exp(-d * 1.2) * 0.25 * (1.0 - smoothstep(1.8, 3.3, d))) * bloom;
   if (dying) {                                                              // crumbling grains
     vec3 cc = mix(cAvg * 0.6, GOLD, goldDeath * 0.75);
     for (int i = 0; i < 14; i++) {
