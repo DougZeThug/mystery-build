@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   mulberry, hash01, whiteNoise, pinkNoise, brownNoise, roomTone, reverbChannel, crackle, sandGrains, crumble, crinkle,
   softClipCurve, foldInto, voiceChord, droneRootHz, rms, peak, BUFFER_JOBS, resample,
+  waxCrackle, clockwork, PHONO_TURN,
 } from '../src/audio/dsp.js';
 
 const SR = 8000;   // small rate keeps the tests fast; the generators are rate-agnostic
@@ -101,4 +102,25 @@ test('resampling keeps shape and length ratio', () => {
   assert.equal(y.length, 4410);
   for (let i = 0; i < y.length - 1; i++) assert.ok(Math.abs(y[i] - Math.sin((2 * Math.PI * 100 * i) / 44100)) < 1e-3);
   assert.equal(resample(x, 48000, 48000), x);
+});
+
+test('phonograph loops: whole turns, zero-mean, bounded, seamless, repeating once a turn', () => {
+  const P = Math.round(PHONO_TURN * SR);
+  for (const gen of [waxCrackle, clockwork]) {
+    const x = gen(SR, 3, 4);
+    assert.equal(x.length % P, 0, `${gen.name} spans whole turns`);
+    assert.ok(finite(x), gen.name);
+    assert.ok(Math.abs(mean(x)) < 1e-6, gen.name);
+    assert.ok(peak(x) <= 0.85 + 1e-6 && peak(x) > 0.5, gen.name);
+    assert.ok(rms(x) > 0.02 && rms(x) < 0.3, `${gen.name} rms ${rms(x)}`);
+    // the loop point is no louder a jump than the signal's own steps
+    let step = 0;
+    for (let i = 1; i < x.length; i++) step = Math.max(step, Math.abs(x[i] - x[i - 1]));
+    assert.ok(Math.abs(x[0] - x[x.length - 1]) <= step, gen.name);
+  }
+  // the clockwork repeats every turn: turn-to-turn correlation is strong (its teeth come round)
+  const c = clockwork(SR, 3, 4);
+  let ab = 0, aa = 0, bb = 0;
+  for (let i = 0; i < P; i++) { const a = c[i] * c[i], b = c[i + P] * c[i + P]; ab += a * b; aa += a * a; bb += b * b; }
+  assert.ok(ab / Math.sqrt(aa * bb) > 0.3, 'tick energy recurs each turn');
 });

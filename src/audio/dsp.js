@@ -286,6 +286,105 @@ export function crinkle(sr, seconds = 2, seed = 17) {
   return scaleTo(removeDC(x), 0.25);
 }
 
+// ---------------------------------------------------------------------------------------------
+// The phonograph (a spring-wound cylinder machine). Its mandrel turns at PHONO_RPM, so every loop
+// below spans a whole number of turns: a scratch on the wax comes round again exactly once a turn
+// and the loops never show a seam.
+
+export const PHONO_RPM = 160;
+export const PHONO_TURN = 60 / PHONO_RPM;          // seconds per turn of the cylinder (0.375)
+
+// Playback surface of a worn wax cylinder: a warm groove hiss that swells and thins once a turn,
+// a scatter of dust ticks, a few heavier pops, and one scratch that returns every revolution.
+export function waxCrackle(sr, seconds = 3, seed = 19) {
+  const turns = Math.max(1, Math.round(seconds / PHONO_TURN));
+  const P = Math.round(PHONO_TURN * sr), n = P * turns;
+  const r = mulberry(seed);
+  // groove hiss: white noise band-limited to ~600 Hz – 4 kHz (wax is warm), breathing per turn
+  const aH = Math.exp(-TAU * 600 / sr), aL = Math.exp(-TAU * 4000 / sr);
+  let hp = 0, prev = 0, l1 = 0, l2 = 0;
+  const hiss = seamless(n, Math.min(4096, n >> 3), (buf) => {
+    for (let i = 0; i < buf.length; i++) {
+      const w = r() * 2 - 1;
+      hp = aH * (hp + w - prev); prev = w;
+      l1 = (1 - aL) * hp + aL * l1; l2 = (1 - aL) * l1 + aL * l2;
+      buf[i] = l2;
+    }
+  });
+  scaleTo(removeDC(hiss), 0.05);
+  const x = new Float32Array(n);
+  for (let i = 0; i < n; i++) x[i] = hiss[i] * (0.82 + 0.18 * Math.sin(TAU * i / P + 1.3) + 0.06 * Math.sin(TAU * 3 * i / P));
+  // dust: many faint ticks, bright and very short
+  const nDust = Math.round(26 * n / sr);
+  for (let g = 0; g < nDust; g++) {
+    const amp = (0.04 + 0.22 * Math.pow(r(), 3)) * (r() < 0.5 ? -1 : 1);
+    tick(x, Math.floor(r() * n), 1800 + r() * 4200, (0.08 + r() * 0.22) * 0.001 * sr, amp, r() * TAU, sr, true);
+  }
+  // pops: fewer, rounder, louder
+  const nPop = Math.round(2.2 * n / sr);
+  for (let g = 0; g < nPop; g++) {
+    const t0 = Math.floor(r() * n), amp = (0.25 + 0.35 * r()) * (r() < 0.5 ? -1 : 1);
+    tick(x, t0, 700 + r() * 900, (0.35 + r() * 0.6) * 0.001 * sr, amp, r() * TAU, sr, true);
+    tick(x, t0 + 3, 2600 + r() * 1800, 0.12 * 0.001 * sr, amp * 0.5, r() * TAU, sr, true);
+  }
+  // the scratch that comes round every turn (and a faint swish of the groove's eccentricity)
+  const sAt = Math.floor(r() * P), sF = 900 + r() * 500;
+  for (let k = 0; k < turns; k++) {
+    tick(x, k * P + sAt, sF, 0.7 * 0.001 * sr, 0.42, 0.4, sr, true);
+    tick(x, k * P + sAt + Math.round(0.0016 * sr), sF * 2.3, 0.3 * 0.001 * sr, -0.2, 1.1, sr, true);
+  }
+  removeDC(x);
+  const p = peak(x);
+  if (p > 0) for (let i = 0; i < n; i++) x[i] *= 0.85 / p;
+  return x;
+}
+
+// The spring motor's clockwork, heard from a little way off: the fly-ball governor's whir (it
+// spins sixteen times a second), the worm gear's teeth ticking eight to the turn (each tooth its
+// own small voice, the pattern repeating every revolution), and the mandrel's soft rumble.
+export function clockwork(sr, seconds = 3, seed = 29) {
+  const turns = Math.max(1, Math.round(seconds / PHONO_TURN));
+  const P = Math.round(PHONO_TURN * sr), n = P * turns;
+  const r = mulberry(seed);
+  const GOV = 6;                                    // governor turns per mandrel turn (16 Hz)
+  // whir: a resonant band of noise near 950 Hz, swelling with each spin of the governor
+  const w0 = TAU * 950 / sr, rad = Math.exp(-PI * 320 / sr), c1 = 2 * rad * Math.cos(w0), c2 = -rad * rad;
+  let y1 = 0, y2 = 0;
+  const whir = seamless(n, Math.min(4096, n >> 3), (buf) => {
+    for (let i = 0; i < buf.length; i++) { const y = (r() * 2 - 1) + c1 * y1 + c2 * y2; y2 = y1; y1 = y; buf[i] = y; }
+  });
+  scaleTo(removeDC(whir), 0.05);
+  // rumble: low noise under ~180 Hz, swaying once a turn
+  const aL = Math.exp(-TAU * 180 / sr);
+  let l1 = 0, l2 = 0;
+  const rum = seamless(n, Math.min(4096, n >> 3), (buf) => {
+    for (let i = 0; i < buf.length; i++) { l1 = (1 - aL) * (r() * 2 - 1) + aL * l1; l2 = (1 - aL) * l1 + aL * l2; buf[i] = l2; }
+  });
+  scaleTo(removeDC(rum), 0.03);
+  const x = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const g = Math.sin(PI * GOV * i / P);
+    x[i] = whir[i] * (0.45 + 0.55 * g * g) + rum[i] * (0.8 + 0.2 * Math.sin(TAU * i / P));
+  }
+  // the gear teeth: eight per turn, each with its own level, pitch and timing slip
+  const TEETH = 8;
+  const teeth = [];
+  for (let j = 0; j < TEETH; j++) teeth.push({ a: 0.18 + 0.32 * r(), f: 2100 + r() * 900, f2: 3900 + r() * 1400, slip: (r() - 0.5) * 0.004 });
+  teeth[0].a = 0.6;                                // one tooth a little bent: a heavier tick each turn
+  for (let k = 0; k < turns; k++) {
+    for (let j = 0; j < TEETH; j++) {
+      const th = teeth[j];
+      const t0 = Math.round(k * P + (j / TEETH + th.slip) * P);
+      tick(x, (t0 + n) % n, th.f, 0.25 * 0.001 * sr, th.a, 0.3, sr, true);
+      tick(x, (t0 + 2 + n) % n, th.f2, 0.12 * 0.001 * sr, th.a * 0.45, 1.7, sr, true);
+    }
+  }
+  removeDC(x);
+  const p = peak(x);
+  if (p > 0) for (let i = 0; i < n; i++) x[i] *= 0.85 / p;
+  return x;
+}
+
 // Soft-clip transfer curve for a WaveShaper fed through a pre-gain of 1/range:
 // linear (unity) up to `knee`, then a tanh shoulder that never exceeds `ceiling`.
 export function softClipCurve(points = 4097, range = 4, knee = 0.6, ceiling = 0.89) {
@@ -312,6 +411,8 @@ export const BUFFER_JOBS = [          // in the order they are first needed
   ['crinkle', (sr, seed) => [crinkle(sr, 2, seed + 7)]],
   ['brown', (sr, seed) => [brownNoise(Math.round(sr * 4), seed + 3)]],
   ['crumble', (sr, seed) => [crumble(sr, 1.9, seed + 6)]],
+  ['clock', (sr, seed) => [clockwork(sr, 3, seed + 9)]],
+  ['wax', (sr, seed) => [waxCrackle(sr, 3, seed + 10)]],
 ];
 export const IR_SECONDS = 3.2;
 

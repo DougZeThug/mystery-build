@@ -278,20 +278,22 @@ export function createBow(env) {
   // (stillness before the hand set off does not count: a stroke is timed from its first movement)
   function hSpeed(win, tx, ty, now) {
     if (hN < 2) return 0;
-    let i = (hHead - 1 + HN) % HN, px = hX[i], py = hY[i], dist = 0, t0 = -1;
+    let i = (hHead - 1 + HN) % HN, px = hX[i], py = hY[i], dist = 0, t0 = -1, t1 = -1;
     for (let k = 1; k < hN; k++) {
       const j = (i - 1 + HN) % HN;
       if (now - hT[j] > win * 1000) break;
       const d = Math.abs((px - hX[j]) * tx + (py - hY[j]) * ty);
-      if (d > 0.25) { dist += d; t0 = hT[j]; }
+      if (d > 0.25) { dist += d; t0 = hT[j]; if (t1 < 0) t1 = hT[i]; }
       px = hX[j]; py = hY[j]; i = j;
     }
     if (t0 < 0) return 0;
-    const span = Math.max(0.03, (now - t0) / 1000);
+    // timed from the first movement to the last; stillness since then counts once it outlasts the
+    // latency of the next pointer event (two frames)
+    const span = Math.max(0.012, (t1 - t0 + Math.max(0, now - t1 - 34)) / 1000);
     return dist / span;
   }
   let grabT = 0, bandT = 0, strokeT = -1, earlyPickT = -1e9;
-  // a sample of the hand (from the frame loop, or every coalesced pointer event); times never go back
+  // a sample of the hand from each (coalesced) pointer event, at its own time; times never go back
   function sample(t, x, y) {
     const last = hN ? hT[(hHead - 1 + HN) % HN] : -1e9;
     hPush(t > last ? t : last, x, y);
@@ -442,7 +444,6 @@ export function createBow(env) {
       lastPx = px; lastPy = py;
       const kv = 1 - Math.exp(-rdt / 0.05);
       vpx += (ivx - vpx) * kv; vpy += (ivy - vpy) * kv;
-      sample(now, px, py);
       edgeAt(px, py, E);
       const B = band();
       if (E.name) wEdge = 1 - smooth(B, B * 2.4, E.d);
