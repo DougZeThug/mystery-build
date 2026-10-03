@@ -786,6 +786,9 @@ export function createCabinet(env) {
   const st = { open: 0, vopen: 0 };
   let userOpen = false;
   let TW = 400, TH = 180, FH = 34, TX = 0, ft = 9, rD = 16, divX = 0;
+  // 'tall': forks stand upright in a deep tray (room below the plate, portrait). 'flat': a wide,
+  // shallow tray that fits under the plate in landscape; the forks lie on their sides in columns.
+  let flat = false, dRows = 2, dGap = 8, fRows = 7, fPitch = 20, fColW = 100, fZoneX = 0;
   let spr = null;
   let nForks = 0, specCheck = 0;
   let hoverFront = false;
@@ -810,17 +813,25 @@ export function createCabinet(env) {
 
   const trayTop = () => game.view.vh - FH - TH * st.open;
   const slotOf = (d, o) => {
-    const col = d.i % 2, row = (d.i / 2) | 0, gap = Math.max(8, rD * 0.75);
-    o.x = TX + ft + gap + rD + col * (rD * 2 + gap);
-    o.y = trayTop() + ft + (TH - ft) / 2 + (row - 0.5) * (rD * 2 + gap);
+    const cols = 4 / dRows, col = d.i % cols, row = (d.i / cols) | 0;
+    o.x = TX + ft + dGap + rD + col * (rD * 2 + dGap);
+    o.y = trayTop() + ft + (TH - ft) / 2 + (row - (dRows - 1) / 2) * (rD * 2 + dGap);
     return o;
   };
+  // a fork's foot in its slot (upright: tines up; flat: lying with the tines to the right)
   const forkSlot = (fk, o) => {
+    if (flat) {
+      const col = (fk.i / fRows) | 0, row = fk.i % fRows;
+      o.x = fZoneX + col * fColW + 8;
+      o.y = trayTop() + ft + 2 + fPitch * (row + 0.5);
+      return o;
+    }
     const zx0 = divX + 6, zx1 = TX + TW - ft - 4, sw = (zx1 - zx0) / FORK_KS.length;
     o.x = zx0 + sw * (fk.i + 0.5);
     o.y = trayTop() + TH - 7;
     return o;
   };
+  const slotAngle = () => (flat ? Math.PI / 2 : 0);
   const unlocked = (fk) => env.isOn('forks') && FORK_ORDER.indexOf(fk.k) < nForks;
 
   function countForks() {
@@ -962,8 +973,8 @@ export function createCabinet(env) {
         forkSlot(fk, tmp); const x = tmp.x - TX, y = tmp.y - trayTop();
         const s = spr?.forks?.[fk.k];
         if (!s) continue;
-        g.save(); g.translate(x + 0.7, y + 0.7); g.globalAlpha = 0.35; blit(g, bakeTintCache(s, 'light'), 1); g.restore();
-        g.save(); g.translate(x, y); blit(g, s.recess, 0.95); g.restore();
+        g.save(); g.translate(x + 0.7, y + 0.7); g.rotate(slotAngle()); g.globalAlpha = 0.35; blit(g, bakeTintCache(s, 'light'), 1); g.restore();
+        g.save(); g.translate(x, y); g.rotate(slotAngle()); blit(g, s.recess, 0.95); g.restore();
       }
       // until the forks are given, their compartment is closed by a lid
       if (!env.isOn('forks')) {
@@ -1014,30 +1025,68 @@ export function createCabinet(env) {
     });
   }
 
+  function forkWidths() {
+    FG.gapW = FG.tineW * 1.25;
+    FG.stemW = FG.tineW * 0.95;
+    FG.footR = FG.tineW * 0.85;
+    FG.yokeR = (FG.gapW + FG.tineW) / 2;
+  }
   function layout() {
     const v = game.view, S = v.plate.size, unit = S / 2, dpr = v.dpr || 1;
     const an = v.anchors?.drawer || { x: v.plate.cx - S * 0.42, y: v.vh - 30, w: S * 0.84, h: 30 };
     FH = Math.round(Math.max(26, an.h || 30));
     TW = Math.round(Math.max(an.w || S * 0.84, Math.min(v.vw - 24, S * 1.0)));
-    TX = Math.round((an.x || 0) + (an.w || TW) / 2 - TW / 2);
-    TX = clamp(TX, 4, Math.max(4, v.vw - TW - 4));
-    TH = Math.round(clamp(S * 0.37, 112, 250));
-    ft = Math.round(clamp(TH * 0.055, 6, 12));
     rD = 0.062 * unit;
-    const gap = Math.max(8, rD * 0.75);
-    divX = TX + ft + gap * 3 + rD * 4;
-    // forks sized to their compartment
-    const zoneW = TX + TW - ft - 4 - (divX + 6);
-    const slotW = zoneW / FORK_KS.length;
-    FG.tineW = clamp(S * 0.0135, 3.2, 8);
-    FG.tineW = Math.min(FG.tineW, (slotW - 6) / 3.3);
-    FG.gapW = FG.tineW * 1.25;
-    FG.stemW = FG.tineW * 0.95;
-    FG.footR = FG.tineW * 0.85;
-    FG.yokeR = (FG.gapW + FG.tineW) / 2;
-    const avail = TH - ft - 14;
-    FG.stemLen = avail * 0.3;
-    FG.tineMax = avail - FG.stemLen - FG.yokeR - FG.tineW * 0.6;
+    // how deep may the open tray be? It stops at the plate's lower edge, overlapping at most a sliver
+    const below = v.vh - FH - (v.plate.y + v.plate.size);
+    const tallTH = Math.round(clamp(S * 0.37, 112, 250));
+    const room = Math.round(below + S * 0.022);
+    flat = room < tallTH && v.mode === 'landscape';
+    if (!flat) {
+      TH = tallTH;
+      ft = Math.round(clamp(TH * 0.055, 6, 12));
+      dRows = 2; dGap = Math.max(8, rD * 0.75);
+      TX = Math.round((an.x || 0) + (an.w || TW) / 2 - TW / 2);
+      TX = clamp(TX, 4, Math.max(4, v.vw - TW - 4));
+      divX = TX + ft + dGap * 3 + rD * 4;
+      // forks sized to their compartment
+      const zoneW = TX + TW - ft - 4 - (divX + 6);
+      const slotW = zoneW / FORK_KS.length;
+      FG.tineW = clamp(S * 0.0135, 3.2, 8);
+      FG.tineW = Math.min(FG.tineW, (slotW - 6) / 3.3);
+      forkWidths();
+      const avail = TH - ft - 14;
+      FG.stemLen = avail * 0.3;
+      FG.tineMax = avail - FG.stemLen - FG.yokeR - FG.tineW * 0.6;
+    } else {
+      TH = Math.max(58, room);
+      ft = Math.round(clamp(TH * 0.07, 5, 10));
+      const innerH = TH - ft;
+      // dampers: a 2 × 2 block if it fits, else a row of four
+      dRows = innerH >= rD * 4 + 3 * 6 ? 2 : 1;
+      dGap = dRows === 2 ? clamp((innerH - rD * 4) / 3, 6, Math.max(8, rD * 0.75)) : Math.max(6, Math.min(rD * 0.6, (innerH - rD * 2) / 2));
+      const dZoneW = (4 / dRows) * rD * 2 + (4 / dRows + 1) * dGap;
+      // forks: lying in as few columns as their width allows
+      const tw0 = clamp(S * 0.0135, 3.2, 8);
+      fRows = clamp(Math.floor((innerH - 4) / (tw0 * 3.25 + 5)), 1, 7);
+      let cols = Math.ceil(FORK_KS.length / fRows);
+      if (cols > 3 && fRows < 7) { fRows = Math.min(7, Math.ceil(FORK_KS.length / 3)); cols = Math.ceil(FORK_KS.length / fRows); }
+      fPitch = (innerH - 4) / fRows;
+      FG.tineW = clamp((fPitch - 5) / 3.25, 2.6, 8);
+      forkWidths();
+      const Lf = clamp(S * 0.3, 90, 260);      // the longest fork (k = 5)
+      fColW = Lf + 16;
+      const need = ft * 2 + dZoneW + 12 + cols * fColW;
+      TW = Math.round(Math.min(v.vw - 16, Math.max(TW, need)));
+      if (need > TW) fColW = Math.max(60, (TW - ft * 2 - dZoneW - 12) / cols);
+      TX = Math.round(v.plate.cx - TW / 2);
+      TX = clamp(TX, 4, Math.max(4, v.vw - TW - 4));
+      divX = TX + ft + dZoneW;
+      fZoneX = divX + 10;
+      const Lk5 = fColW - 16;
+      FG.stemLen = Lk5 * 0.32;
+      FG.tineMax = Lk5 - FG.stemLen - FG.yokeR - FG.tineW * 0.6;
+    }
     countForks();
     spr = { damper: bakeDamper(dpr) };
     spr.forks = bakeForks(dpr);
@@ -1046,7 +1095,7 @@ export function createCabinet(env) {
     spr.tray = bakeTray(dpr);
     spr.trayForksOn = env.isOn('forks');
     for (const d of dampers) if (d.state !== 'plate') { slotOf(d, tmp); d.x = tmp.x; d.y = tmp.y; d.state = 'slot'; }
-    for (const fk of forks) { forkSlot(fk, tmp); fk.x = tmp.x; fk.y = tmp.y; if (fk.state !== 'slot') fk.state = 'slot'; }
+    for (const fk of forks) { forkSlot(fk, tmp); fk.x = tmp.x; fk.y = tmp.y; fk.a = slotAngle(); fk.va = 0; if (fk.state !== 'slot') fk.state = 'slot'; }
   }
 
   // ---- interaction ------------------------------------------------------------------------------
@@ -1061,7 +1110,8 @@ export function createCabinet(env) {
     for (const fk of forks) {
       if (fk.state !== 'slot' || !unlocked(fk)) continue;
       const L = forkLen(fk.k), hw = FG.yokeR + FG.tineW / 2 + pad;
-      if (x > fk.x - hw && x < fk.x + hw && y < fk.y + pad && y > fk.y - L - pad) return fk;
+      if (flat) { if (y > fk.y - hw && y < fk.y + hw && x > fk.x - pad && x < fk.x + L + pad) return fk; }
+      else if (x > fk.x - hw && x < fk.x + hw && y < fk.y + pad && y > fk.y - L - pad) return fk;
     }
     return null;
   }
@@ -1233,8 +1283,8 @@ export function createCabinet(env) {
         const on = Math.abs(uv.u) < 0.985 && Math.abs(uv.v) < 0.985;
         if (on && !fk.touching) { fk.touching = true; if (fk.e > 0.03) touchFork(fk, uv.u, uv.v); else env.emit('sfx', { name: 'tick', pan: env.panOf(fk.x), soft: true }); }
         else if (!on && fk.touching) fk.touching = false;
-      } else { forkSlot(fk, tmp); tx = tmp.x; ty = tmp.y; }
-      if (fk.state === 'slot' && st.open < 0.02) { fk.x = tx; fk.y = ty; fk.vx = fk.vy = 0; }
+      } else { forkSlot(fk, tmp); tx = tmp.x; ty = tmp.y; ta = slotAngle(); }
+      if (fk.state === 'slot' && st.open < 0.02) { fk.x = tx; fk.y = ty; fk.vx = fk.vy = 0; fk.a = ta; fk.va = 0; }
       spring(fk, 'x', 'vx', tx, w0, dt); spring(fk, 'y', 'vy', ty, w0, dt);
       springAngle(fk, 'a', 'va', ta, 14, dt);
       spring(fk, 'lift', 'vlift', lt, 14, dt);
