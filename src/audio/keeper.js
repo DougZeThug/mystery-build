@@ -8,9 +8,9 @@
 // (Her arrival phrase is the one-shot 'keeperArrive' in sfx.js.)
 
 export const KEEPER_HZ = 55;
-const LEVEL = 0.016;
+const LEVEL = 0.02;
 // harmonics of 55 Hz: the stack 2–6 carries her, 7–13 sit in the formant, a trace of the true 55
-export const KEEPER_PARTIALS = [0, 0.04, 0.9, 1, 0.8, 0.6, 0.5, 0.22, 0.26, 0.24, 0.22, 0.16, 0.12, 0.07, 0.04, 0.025, 0.015];
+export const KEEPER_PARTIALS = [0, 0.03, 0.7, 0.85, 0.75, 0.6, 0.5, 0.3, 0.34, 0.32, 0.28, 0.2, 0.14, 0.08, 0.05, 0.03, 0.02];
 const TAU = Math.PI * 2;
 
 function glide(last, key, param, v, at, tau) {
@@ -34,8 +34,8 @@ export function createKeeper(E) {
     const out = E.gain(0), pan = E.pan(0);
     out.connect(pan); pan.connect(E.bus.singer);
     // formant: a broad bump near 560 Hz, then a soft roll-off (nothing glassy about her)
-    const fm = E.filt('peaking', 560, 1.2), lp = E.filt('lowpass', 1500, 0.5);
-    fm.gain.value = 6;
+    const fm = E.filt('peaking', 560, 1.0), lp = E.filt('lowpass', 2400, 0.5);
+    fm.gain.value = 7;
     fm.connect(lp); lp.connect(out);
     // the stack and its twin
     const a = E.osc(wave, KEEPER_HZ), b = E.osc(wave, KEEPER_HZ, 5), gb = E.gain(0.55);
@@ -48,7 +48,7 @@ export function createKeeper(E) {
     // little air band above it
     const nz = E.src('pink'), nAm = E.gain(0.5), pulse = E.osc('sine', KEEPER_HZ), pg = E.gain(0.45);
     pulse.connect(pg); pg.connect(nAm.gain);
-    const nBp = E.filt('bandpass', 620, 1.4), nG = E.gain(0.05), air = E.filt('bandpass', 1700, 1.1), airG = E.gain(0.018);
+    const nBp = E.filt('bandpass', 620, 1.4), nG = E.gain(3.5), air = E.filt('bandpass', 1700, 1.1), airG = E.gain(1);
     nz.connect(nAm); nAm.connect(nBp); nBp.connect(nG); nG.connect(lp);
     nAm.connect(air); air.connect(airG); airG.connect(out);
     for (const o of [a, b, vib, drift, pulse]) o.start(at);
@@ -89,7 +89,7 @@ export function createKeeper(E) {
       glide(last, 'p', n.pan.pan, Math.max(-0.7, Math.min(0.7, (K.cu || 0) * 0.6)), at, 0.8);
       // in the dark the formant sinks and closes a little (a sleepier vowel)
       glide(last, 'f', n.fm.frequency, 560 - 90 * dark, at, 1);
-      glide(last, 'l', n.lp.frequency, 1500 - 400 * dark, at, 1);
+      glide(last, 'l', n.lp.frequency, 2400 - 800 * dark, at, 1);
       glide(last, 'v', n.vg.gain, 7 * (1 - 0.4 * dark), at, 1);
     },
   };

@@ -27,7 +27,7 @@ export const LEVELS = {
   scratch: 12, bowLift: 14, birth: 4, split: 5, fuse: 2, eat: 3.5, crumble: 4, fizzle: 6, fall: 3,
   extinct: -5, choirSwell: 6, floorBloom: 0, creak: 11, cord: 13, lightOn: 9, lightOff: 11,
   drawer: 0, page: 6, bookOpen: 4, bookClose: 0, grab: 11, drop: 4, glass: 7, tick: 4, reveal: 8, moth: 6,
-  phonoNeedle: 4, phonoStop: 4, keeperArrive: 0,
+  phonoNeedle: 4, phonoStop: 4, keeperArrive: -3,
 };
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);

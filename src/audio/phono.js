@@ -11,8 +11,8 @@ import { PHONO_TURN } from './dsp.js';
 
 const NM = MODES.length;
 const TONE_MAX = 6;               // doubled modes, loudest first
-const TONE_LEVEL = 0.3;
-const MOTOR_LEVEL = 0.03, HISS_LEVEL = 0.05, BED_LEVEL = 0.07;
+const TONE_LEVEL = 0.17;
+const MOTOR_LEVEL = 0.03, HISS_LEVEL = 0.05, BED_LEVEL = 0.15;
 const SEND = 0.22;                // the machine is in the room: a little reverb
 const TURN_HZ = 1 / PHONO_TURN;   // 2.67 Hz: once-a-turn wow, the wax's swell
 

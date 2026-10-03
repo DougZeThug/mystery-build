@@ -26,7 +26,7 @@ const row = (name, a, extra = '') => console.log(`${name.padEnd(28)} peak ${db(a
 if (r.unity) console.log('chain gain (in -> out dB):', r.unity.map((u) => `${(20 * Math.log10(u.in)).toFixed(0)}dB->${u.gainDb.toFixed(2)}`).join('  '));
 if (r.dcWindows) console.log('floor per-second mean:', r.dcWindows.join(' '));
 if (r.mix) {
-  console.log('== mixed scene (12 s) ==');
+  console.log(`== mixed scene (${r.mix.dur || 12} s) ==`);
   row('mix', r.mix, `  nodes<=${r.mix.maxNodes} shots<=${r.mix.maxShots} comp meter ${r.mix.maxReductionDb.toFixed(1)} dB`);
   console.log('  per second rms:', r.mix.perSec.map((p) => db(p.rms).trim()).join(' '));
   console.log('  per second peak:', r.mix.perSec.map((p) => db(p.peak).trim()).join(' '));

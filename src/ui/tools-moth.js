@@ -307,6 +307,7 @@ export function createMoth(env, forced = false) {
 
   return {
     pub, layout, update, summon, startle, disturb,
+    pos: () => ({ x: m.x, y: m.y, phase: m.phase }),
     hit(x, y, touch) {
       if (m.phase === 'away') return false;
       return Math.hypot(x - m.x, y - m.y) < W * 0.5 * (1 + m.z * 0.5) + (touch ? 12 : 4);

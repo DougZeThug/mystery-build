@@ -196,7 +196,9 @@ const BOW_TONE = 3.2, BOW_ROSIN = 0.2;
 // The singers: one voice per living species (max 10, most numerous first). Each component of the
 // species is a glassy oscillator (hybrids sing chords), a detuned twin thickens a crowd, a slow
 // vibrato and breathing keep it alive. Panned to where the species gathers. In the dark they sink
-// an octave, soften and slow; in a choir they swell; around a resting finger they purr.
+// an octave, soften and slow; in a choir they swell; around a resting finger they purr. When many
+// cling to the bronze against a violent plate (life state 'cling'), the clinging kinds tremble: a
+// fast, faint tremolo and a shiver of pitch (one shared LFO, depth by how many of each kind cling).
 
 const SING_MAX = 10;
 const VIB = [[4.3, 9], [5.6, 12]];      // two shared vibratos (Hz, cents); each species takes one
@@ -206,7 +208,7 @@ export function createSingers(E) {
   const slots = [];
   const pick = new Int16Array(256);
   let stamp = 0;
-  let bank = null, bankIdle = 0;
+  let bank = null, bankIdle = 0, trem = null;
   const bl = {};
 
   function wakeBank(at) {
@@ -215,13 +217,16 @@ export function createSingers(E) {
       o.connect(g); o.start(at);
       return { o, g, rate, depth };
     });
+    trem = E.osc('sine', TREM_HZ);
+    trem.start(at);
     for (const k in bl) delete bl[k];
   }
   function sleepBank(at) {
-    const nodes = [];
+    const nodes = [trem];
+    E.stop(trem, at);
     for (const v of bank) { E.stop(v.o, at); nodes.push(v.o, v.g); }
     bank[0].o.onended = () => E.free(nodes);
-    bank = null;
+    bank = null; trem = null;
   }
   function find(id) {
     for (let i = 0; i < slots.length; i++) if (slots[i].id === id) return slots[i];
@@ -245,13 +250,20 @@ export function createSingers(E) {
     // a slightly detuned twin of the lowest voice: a crowd of the same kind shimmers
     const oc = E.osc(E.waves.glass, freqs[0], 6 + 6 * h2), gc = E.gain(0);
     oc.connect(gc); gc.connect(out); vib.connect(oc.detune); oc.start(at);
-    const s = { id: sp.id, freqs, os, oc, gc, out, pan, vib, h, h2, ph: h * TAU,
+    // trembling (clinging): tremolo onto the voice's gain, a shiver onto every pitch; silent at 0
+    const tg = E.gain(0), tp = E.gain(0);
+    trem.connect(tg); tg.connect(out.gain);
+    trem.connect(tp);
+    for (const o of os) tp.connect(o.detune);
+    tp.connect(oc.detune);
+    const s = { id: sp.id, freqs, os, oc, gc, out, pan, vib, tg, tp, h, h2, ph: h * TAU,
       bw: TAU / (5 + 4 * h2), stamp, idle: 0, last: {} };
     slots.push(s);
     return s;
   }
   function kill(s, at) {
-    const nodes = [...s.os, s.oc, s.gc, s.out, s.pan];
+    const nodes = [...s.os, s.oc, s.gc, s.out, s.pan, s.tg, s.tp];
+    if (trem) { try { trem.disconnect(s.tg); trem.disconnect(s.tp); } catch { /* gone */ } }
     for (const o of s.os) { E.stop(o, at); try { s.vib.disconnect(o.detune); } catch { /* gone */ } }
     E.stop(s.oc, at);
     try { s.vib.disconnect(s.oc.detune); } catch { /* gone */ }
@@ -279,6 +291,7 @@ export function createSingers(E) {
       const norm = 1 / Math.sqrt(1 + 0.3 * Math.max(0, count - 1));
       const det = snap.detune || 0;
       const T = E.t;
+      const many = clamp01(((snap.clingN || 0) - 2) / 4);   // a few clinging: nothing; six or more: full
       for (let j = 0; j < count; j++) {
         const sp = list[pick[j]];
         let s = find(sp.id);
@@ -289,6 +302,10 @@ export function createSingers(E) {
         const purr = 1 + 0.22 * hold * Math.sin(T * TAU * 3.1 + s.ph);
         const g = SING_LEVEL * Math.sqrt(c) * (0.3 + 0.7 * e) * (1 - 0.45 * dark) * (1 + 0.55 * choir) * hush * norm * breath * purr;
         glide(s.last, 'g', s.out.gain, g, at, 0.12);
+        // clinging: depth by the share of this kind that clings, once many cling at all
+        const w = many > 0 && sp.cling > 0 ? many * Math.min(1, sp.cling / Math.max(1, sp.count)) : 0;
+        glide(s.last, 'tg', s.tg.gain, g * TREM_DEPTH * w, at, w > 0 ? 0.15 : 0.4);
+        glide(s.last, 'tp', s.tp.gain, TREM_CENTS * w, at, w > 0 ? 0.15 : 0.4);
         glide(s.last, 'c', s.gc.gain, Math.min(0.55, 0.18 * (c - 1)), at, 0.4);
         glide(s.last, 'p', s.pan.pan, Math.max(-0.75, Math.min(0.75, (sp.cu || 0) * 0.65)), at, 0.3);
         // cracks pull each species a little off true (its own way), so they beat against the plate
@@ -320,6 +337,7 @@ export function createSingers(E) {
   };
 }
 const SING_LEVEL = 0.05;
+const TREM_HZ = 10.5, TREM_DEPTH = 0.42, TREM_CENTS = 7;
 
 // ---------------------------------------------------------------------------------------------
 // The room: a baked loop of rumble and air (dsp.js roomTone), the lamp's filament hum while it

@@ -26,6 +26,7 @@ for (const a of args) {
     console.log(`  ${x.t[0]}-${x.t[1]} s  rms ${x.rms}  peak ${x.peak}`);
     console.log('    bands', Object.entries(x.bands).map(([f, v]) => `${f}:${v}`).join(' '));
     console.log('    peaks', x.peaks.map(([f, v]) => `${f}Hz ${v}`).join(', '));
+    console.log('    AM depth', Object.entries(x.mod).map(([f, v]) => `${f}Hz ${v}`).join('  '));
   }
 }
 if (shot) await page.screenshot({ path: shot, fullPage: true });
