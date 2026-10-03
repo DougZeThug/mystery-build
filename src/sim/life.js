@@ -32,14 +32,18 @@ export const TUNE = {
   songCrowd: 48,        // and it quickens mostly when the plate is sparse (rate × (1 - N/songCrowd)^1.5)
   gestation: 23,        // seconds of strong, coherent song to quicken a singer of a new mode
   gestationFew: 17,     // ...while fewer than earlyKinds species are known (the first minutes)
-  earlyKinds: 3,
+  driveGestation: 11,   // ...and while the player holds that mode (bow, fork, phonograph) at full strength
   familiar: 2.6,        // a mode whose species is already alive quickens this much faster
-  // the very first singers: a newcomer will not hold a bow for half a minute. While fewer than
-  // earlyBirths singers have been born (state.stats.births), a steady bowed figure quickens one in
-  // about earlyGestation seconds at full strength (strength = (total - earlyFrom) / earlyRange)
-  earlyBirths: 3, earlyStable: 1.6, earlyGestation: 7.4, earlyFrom: 0.2, earlyRange: 0.3,
+  // the player's own note quickens by intent, not loudness: its strength is
+  // (drive on the dominant mode - driveFrom) / driveRange, so any moving bow counts nearly in full
+  driveFrom: 0.1, driveRange: 0.2,
+  // the eager plate: while fewer than earlyKinds species are known, a steady played figure quickens
+  // a singer in about earlyGestation seconds at full strength (a newcomer will not hold a bow for
+  // half a minute). A touched tuning fork always quickens its exact mode at this pace, and so does
+  // a cylinder replaying a vanished kind.
+  earlyKinds: 3, earlyStable: 1.6, earlyGestation: 7.4,
   quickDrop: 0.42,      // quickening spent by each birth
-  quickDecay: 0.05,     // per second while the plate is incoherent
+  quickDecay: 0.05,     // per second, for every mode the plate is not coherently holding
   newbornE: 0.55,
   // chorus (what the population sings into the plate)
   chorusAmp: 0.42, chorusCount: 3, chorusMax: 0.9, breathDepth: 0.2, darkVoice: 0.6, voiceE: 0.4,
@@ -55,7 +59,9 @@ export const TUNE = {
   beat: 0.5, beatFrom: 10, beatScale: 12,   // a crowded pitch beats: unison value 1 - beat·(voices - from)/scale
   metab: 0.0075, metabBase: 0.45, metabSlope: 1.0,   // metabolism = metab·(base + slope·e): bright singers burn faster
   ageCost: 0.004, crowdK: 21, crowdStress: 0.06, stillPenalty: 0.45, detunePenalty: 9,
-  voiceRoom: 1.0, hush: 0.75,                // they sing into the room a bow leaves, and hush when it speaks
+  // they sing into the room a bow leaves, and hush when it speaks: by `hush` once the player's
+  // drive reaches hushAt, however softly it is played, so the played figure wins the plate
+  voiceRoom: 1.0, hush: 0.75, hushAt: 0.3,
   // division
   splitE: 0.86, splitAge: 25, splitSand: 10, splitCool: 22, splitTake: 10, mutate: 0.06,
   lifeMin: 240, lifeMax: 480, aurataLife: 1.5,
@@ -80,6 +86,9 @@ export const TUNE = {
   choirMin: 3, choirPop: 12, choirCons: 0.1, choirHold: 5, choirLen: 34, choirCool: 600, choirBreak: 3,
   floorKs: [5, 10, 20, 40], floorHold: 6, floorCool: 150,
   dreams: true,         // life drives sand.setDream() in darkness (extinct figures); false to leave it to others
+  // time away: the coarse evolution fits this many ms of compute, lengthening its step (up to
+  // offlineMaxStep seconds) on a slow device rather than skipping time
+  offlineBudget: 85, offlineMaxStep: 120,
 };
 
 const TAU = Math.PI * 2;
@@ -132,8 +141,9 @@ export function createLife(game) {
   let wearDirty = false, wearClock = 0;
 
   // births
-  let quick = 0, quickMode = null, birthGap = 0;
-  let sandBirths = 0;          // singers this plate has quickened from sand (mirror of state.stats.births)
+  const quickBy = new Float32Array(NM);   // quickening per mode: wandering to a neighbour and back loses little
+  let birthGap = 0;
+  let ghostRec = null, ghostT = 0;        // an extinct kind a cylinder is replaying, and for how long
   let kindsKnown = -1;         // species records, the keeper aside (refreshed in upkeepRecords)
   let drivenNow = false;       // is the player (bow, fork, phonograph) driving the plate this step?
   // the keeper
@@ -404,7 +414,7 @@ export function createLife(game) {
     }
     let ext2 = 0;
     for (let i = 0; i < NM; i++) ext2 += extAmp[i] * extAmp[i];
-    const hush = 1 - TUNE.hush * clamp(Math.sqrt(ext2) / 0.9, 0, 1);   // when the bow speaks, they listen
+    const hush = 1 - TUNE.hush * clamp(Math.sqrt(ext2) / TUNE.hushAt, 0, 1);   // when the bow speaks, they listen
     for (let i = 0; i < NM; i++) {
       chorusAmp[i] *= hush;
       if (extAmp[i] > 0) chorusAmp[i] = Math.min(chorusAmp[i], Math.max(0, TUNE.voiceRoom - extAmp[i]));

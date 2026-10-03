@@ -5,12 +5,12 @@ import { createField, makeCrackFamily } from '../src/sim/field.js';
 import { createSand } from '../src/sim/sand.js';
 import { makeRng } from '../src/core/rng.js';
 
-function world(cracks) {
+function world(cracks, tuning = null) {
   const ev = [];
   const bus = { emit: (type, p) => ev.push({ type, p }) };
   const state = { plate: { fatigue: 0, cracks } };
   const field = createField({ state, bus });
-  const sand = createSand(field, { state, bus });
+  const sand = createSand(field, { state, bus, tuning });
   return { ev, state, field, sand };
 }
 const step = (w, secs, dt = 1 / 60) => { for (let i = 0; i < Math.round(secs / dt); i++) { w.field.update(dt); w.sand.update(dt); } };
@@ -62,6 +62,50 @@ test('gilding needs a sensible amount of gold (tens of grains, not thousands)', 
   }
   assert.ok(crack.healed, 'heals');
   assert.ok(used > 15 && used < 200, `${used} grains`);
+});
+
+// a straight 0.6-long crack in from the left rim, 30 segments
+function rimCrack() {
+  const crack = { pts: [], gold: [], healed: false };
+  for (let i = 0; i <= 30; i++) crack.pts.push([-1 + i * 0.02, 0.3]);
+  crack.gold = new Array(30).fill(0);
+  return crack;
+}
+// one gold grain at a time at (u,v) until the crack heals (or `max` grains)
+function gildAt(w, crack, u, v, max = 80) {
+  for (let i = 0; i < max && !crack.healed; i++) { w.sand.pour(u, v, 1, 1, 0.002); step(w, 1 / 10); }
+  return w.sand.lodged;
+}
+
+test('gold that lodges in one place runs along the seam into every gap, the rim end included', () => {
+  const crack = rimCrack();
+  const w = world([crack], { HEAL_AT: 1 });        // demand every segment, to see the flow reach them all
+  w.field.setSource('t', [{ mode: '1.3+', amp: 0.5 }]);
+  const lodged = gildAt(w, crack, -0.45, 0.3);     // only ever at the inner tip
+  assert.ok(crack.healed, `not healed; gold ${crack.gold.map((g) => g.toFixed(2)).join(' ')}`);
+  // nothing is thrown away: 0.6 of crack at GILD_LEN 0.03 a grain is 20 grains
+  assert.ok(lodged >= 19 && lodged <= 22, `${lodged} grains`);
+});
+
+test('a crack heals once ~90% of its length is gilded; the seam is then gold throughout', () => {
+  const crack = rimCrack();
+  const w = world([crack]);
+  w.field.setSource('t', [{ mode: '1.3+', amp: 0.5 }]);
+  const gilt = () => crack.gold.reduce((a, g) => a + g, 0) * 0.02;   // gilded length
+  let last = 0, lodged = 0;
+  for (let i = 0; i < 80 && !crack.healed; i++) {
+    w.sand.pour(-0.7, 0.3, 1, 1, 0.002);
+    step(w, 1 / 10);
+    if (crack.healed || w.sand.lodged === lodged) continue;
+    const per = (gilt() - last) / (w.sand.lodged - lodged);
+    assert.ok(Math.abs(per - 0.03) < 1e-4, `a grain gilded ${per.toFixed(4)} of the crack, not GILD_LEN`);
+    last = gilt(); lodged = w.sand.lodged;
+  }
+  assert.ok(crack.healed);
+  assert.ok(last >= 0.5 && last < 0.54, `healed at ${(last / 0.6).toFixed(2)} gilded`);
+  assert.ok(w.sand.lodged >= 17 && w.sand.lodged <= 20, `${w.sand.lodged} grains for 0.9 × 20`);
+  assert.ok(crack.gold.every((g) => g === 1));
+  assert.equal(w.ev.filter((e) => e.type === 'plate:heal').length, 1);
 });
 
 test('sand lying in an unhealed crack drains while the plate sings, not when it is still', () => {
