@@ -29,11 +29,11 @@ for (const [name, tail] of cases) {
   if (ONLY && !name.includes(ONLY)) continue;
   const clingAt = new Map();
   const holds = [];
-  let fellIds = [];
+  const fellAt = [];
   const offs = [
-    bus.on('mote:cling', (e) => { if (!clingAt.has(e.mote.id)) clingAt.set(e.mote.id, T()); }),
+    bus.on('mote:cling', (e) => { clingAt.set(e.mote.id, T()); }),
     bus.on('mote:throw', (e) => { const t0 = clingAt.get(e.mote.id); if (t0 != null) holds.push(T() - t0); clingAt.delete(e.mote.id); }),
-    bus.on('mote:fall', (e) => { fellIds.push(e.mote.id); }),
+    bus.on('mote:fall', () => { fellAt.push(T() - violentFrom); }),
   ];
   let G = null;
   const T = () => (G ? G.t : 0);
@@ -49,5 +49,5 @@ for (const [name, tail] of cases) {
   for (const off of offs) off();
   const mean = holds.length ? holds.reduce((a, b) => a + b, 0) / holds.length : 0;
   const min = holds.length ? Math.min(...holds) : 0;
-  console.log(`${name.padEnd(28)} pop ${String(popBefore).padStart(2)} -> ${String(summary.pop).padStart(2)}  clings ${String(summary.clings).padStart(3)}  throws ${String(summary.throws).padStart(3)}  fell ${String(summary.fell).padStart(2)} (${Math.round(100 * summary.fell / Math.max(1, popBefore))}%)  hunger ${summary.hunger}  cling-before-throw mean ${mean.toFixed(1)} s, min ${min.toFixed(1)} s`);
+  console.log(`${name.padEnd(28)} pop ${String(popBefore).padStart(2)} -> ${String(summary.pop).padStart(2)}  clings ${String(summary.clings).padStart(3)}  throws ${String(summary.throws).padStart(3)}  fell ${String(summary.fell).padStart(2)} (${Math.round(100 * summary.fell / Math.max(1, popBefore))}%)  hunger ${summary.hunger}  last cling before a throw: mean ${mean.toFixed(1)} s, min ${min.toFixed(1)} s  falls at ${fellAt.map((t) => t.toFixed(0)).join(',')}`);
 }

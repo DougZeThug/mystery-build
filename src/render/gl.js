@@ -605,7 +605,7 @@ export function createRenderer(canvas, game) {
       if (count > 0) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, R.lm.fb);
         gl.viewport(0, 0, LM_SIZE, LM_SIZE);
-        gl.clearColor(0, 0, 0, 1);
+        gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.ONE, gl.ONE);

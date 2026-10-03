@@ -312,7 +312,7 @@ void main() {
   // ---- plate ----------------------------------------------------------------------------------
   float inPlate = 1.0 - smoothstep(-px * 0.5, px * 0.5, dEdge);
   vec3 emiss = vec3(0.0);
-  float lm = 0.0;
+  float lm = 0.0, lmS = 0.0;
   if (inPlate > 0.0) {
     float din = -dEdge;
     vec4 mA = textureGrad(tMatA, uvP, gdx, gdy);
@@ -428,9 +428,11 @@ void main() {
     // singers' light on the bronze
     if (uLmOn > 0.0) {
       // in full light the glow is a whisper; in the dark it is all there is
-      vec3 sl = T0(tLight, (pu / uLmExt) * 0.5 + 0.5).rgb * (2.0 - 1.6 * smoothstep(0.0, 0.8, uLevel));
+      vec4 slm = T0(tLight, (pu / uLmExt) * 0.5 + 0.5) * (2.0 - 1.6 * smoothstep(0.0, 0.8, uLevel));
+      vec3 sl = slm.rgb;
       metal += sl * (alb * 4.6 + specCol * 0.18) * cav;
       lm = dot(sl, vec3(0.33));
+      lmS = slm.a;
     }
 
     // cracks: dark hairline, lip, gold
@@ -484,7 +486,7 @@ void main() {
       // half-shadow at the corners
       sandCol += albS * (amb * 0.35 + 0.045 * uLightI * (1.0 - smoothstep(0.1, 0.7, E)));
       sandCol *= shim;
-      if (uLmOn > 0.0) sandCol += albS * lm * 1.4 * vec3(0.9, 0.95, 1.0);
+      if (uLmOn > 0.0) sandCol += albS * lmS * 1.4 * vec3(0.9, 0.95, 1.0);
       sandA = cov;
     }
     // gold grains: heavier, brighter, they glitter
@@ -743,18 +745,23 @@ void main() {
   if (uPass == 2) {                       // light on the bronze (plate units)
     float d = length(vQ);
     if (keeper > 0.5) {                   // she lights a wide, warm stretch of the plate
-      float r0 = 0.17;
+      // (softer at its heart than a small singer's, so she stays brighter than what she lights)
+      float r0 = 0.2;
       float x2 = d * d / (r0 * r0);
       float fall = 1.0 / ((1.0 + x2) * sqrt(1.0 + x2));
       fall *= 1.0 - smoothstep(0.35, 1.15, d);
-      oC = vec4(vec3(1.0, 0.72, 0.42) * inten * fall * alpha * 1.25, 1.0);
+      vec3 kl = vec3(1.0, 0.72, 0.42) * inten * fall * alpha * 0.55;
+      // alpha carries the light the sand may take from her: pale grains would otherwise catch
+      // all of it and the dark would lose its point (the sand vanishes)
+      oC = vec4(kl, dot(kl, vec3(0.333)) * 0.25);
       return;
     }
     float r0 = 0.05 * (0.6 + 0.4 * r / 0.045);
     float x2 = d * d / (r0 * r0);
     float fall = 1.0 / ((1.0 + x2) * sqrt(1.0 + x2));
     fall *= 1.0 - smoothstep(0.12, 0.5, d);
-    oC = vec4(sat(cAvg, 1.4) * inten * fall * alpha * (1.0 + boost) * 1.1 * scale * (cling ? 1.3 : 1.0), 1.0);
+    vec3 sl = sat(cAvg, 1.4) * inten * fall * alpha * (1.0 + boost) * 1.1 * scale * (cling ? 1.3 : 1.0);
+    oC = vec4(sl, dot(sl, vec3(0.333)));
     return;
   }
 
@@ -770,11 +777,12 @@ void main() {
       float fi = float(i);
       float a = fi * 1.0472 + phase * 6.2832 + sin(uTime * (7.0 + walk * 16.0) + fi * 2.1) * 0.16 * (0.3 + walk);
       vec2 fp = vec2(cos(a), sin(a)) * (1.0 + 0.08 * sin(uTime * 13.0 + fi * 1.7) * (0.3 + walk)) * scale;
-      feet = max(feet, 1.0 - smoothstep(0.07, 0.14, length(q - fp)));
+      float fr = keeper > 0.5 ? 0.45 : 1.0;                 // her feet are no larger than theirs
+      feet = max(feet, 1.0 - smoothstep(0.07 * fr, 0.14 * fr, length(q - fp)));
     }
     feet *= (1.0 - lift) * alpha * (1.0 - crumble);
     float lit = smoothstep(0.02, 0.5, uLevel);
-    float bodyD = (1.0 - smoothstep(0.9, 1.02, d / max(scale, 0.05))) * 0.55 * alpha * (1.0 - crumble);
+    float bodyD = (1.0 - smoothstep(0.9, 1.02, d / max(scale, 0.05))) * (keeper > 0.5 ? 0.5 : 0.55) * alpha * (1.0 - crumble);
     float a = max(max(sh, bodyD) * lit, feet * 0.85);
     oC = vec4(vec3(0.03, 0.022, 0.014) * feet * 0.85, a);
     return;
@@ -792,23 +800,26 @@ void main() {
   if (dying) body *= step(crumble * 1.1, vnoise(lq * 4.0 + phase * 31.0) * 0.9 + 0.1 * (1.0 - ld));
 
   vec3 col = vec3(0.0);
-  float halo = exp(-(d * d) / (scale * scale + 1e-3) * 0.62);
-  col += cHalo * halo * 0.42 * inten * (1.0 + boost * 1.6);
-  float rimK = cling ? 1.9 : 0.85;
-  col += cHalo * body * (0.05 + rimK * pow(ld, 7.0)) * inten;              // glassy body, brighter rim
-  if (cling) col += mix(cHalo, vec3(1.0), 0.5) * exp(-pow((ld - 1.0) * 11.0, 2.0)) * 0.55 * inten;
-  if (keeper > 0.5) {
-    // a long, faint halo, and a body of warm light rather than glass
-    col += cHalo * exp(-d * 0.85) * 0.16 * inten * (1.0 - smoothstep(3.6, 5.2, d));
-    col += KEEP * body * (0.16 + 0.3 * (1.0 - ld * ld)) * inten;
-  }
-
   vec2 fq = lq * 0.98;
-  vec3 lines = keeper > 0.5 ? c1 * floorFigure(fq) : c1 * figure(fq, vB.z, vB.w, vC.x, vNorm.x);
-  if (nc > 1.5) lines += c2 * figure(fq, vC.y, vC.z, vC.w, vNorm.y);
-  if (nc > 2.5) lines += c3 * figure(fq, vD.x, vD.y, vD.z, vNorm.z);
-  lines = mix(lines, lines * mix(vec3(1.0), GOLD * 1.3, 0.8), oldT * 0.6);
-  col += lines * body * (1.6 - 0.6 * pow(ld, 6.0)) * inten * mix(1.0, 1.6, oldT * 0.3);
+  if (keeper > 0.5) {
+    // the keeper: a body of warm gold light rather than glass, the floor's figure drawn in it in
+    // a paler gold, a soft near halo and a long, faint one that reaches far over the bronze
+    float halo = exp(-(d * d) / (scale * scale + 1e-3) * 0.8);
+    col += cHalo * (halo * 0.34 + exp(-d * 0.85) * 0.13 * (1.0 - smoothstep(3.4, 5.2, d))) * inten;
+    col += vec3(1.0, 0.76, 0.42) * body * (0.14 + 0.4 * (1.0 - ld * ld) + 0.5 * pow(ld, 9.0)) * inten;
+    col += vec3(1.0, 0.94, 0.80) * floorFigure(fq) * body * (0.85 - 0.3 * pow(ld, 6.0)) * inten;
+  } else {
+    float halo = exp(-(d * d) / (scale * scale + 1e-3) * 0.62);
+    col += cHalo * halo * 0.42 * inten * (1.0 + boost * 1.6);
+    float rimK = cling ? 1.9 : 0.85;
+    col += cHalo * body * (0.05 + rimK * pow(ld, 7.0)) * inten;              // glassy body, brighter rim
+    if (cling) col += mix(cHalo, vec3(1.0), 0.5) * exp(-pow((ld - 1.0) * 11.0, 2.0)) * 0.55 * inten;
+    vec3 lines = c1 * figure(fq, vB.z, vB.w, vC.x, vNorm.x);
+    if (nc > 1.5) lines += c2 * figure(fq, vC.y, vC.z, vC.w, vNorm.y);
+    if (nc > 2.5) lines += c3 * figure(fq, vD.x, vD.y, vD.z, vNorm.z);
+    lines = mix(lines, lines * mix(vec3(1.0), GOLD * 1.3, 0.8), oldT * 0.6);
+    col += lines * body * (1.6 - 0.6 * pow(ld, 6.0)) * inten * mix(1.0, 1.6, oldT * 0.3);
+  }
 
   if (aur > 0.5) {                                                          // gold veins
     float vn = abs(sin(lq.x * 3.9 + sin(lq.y * 3.1 + phase * 6.0 + uTime * 0.2) * 1.5) * cos(lq.y * 2.3 - lq.x * 1.4));
