@@ -905,8 +905,8 @@ void main() {
       float rad = mix(1.2 + 1.9 * h1, 0.12, conv);
       vec2 dq = q - vec2(cos(a), sin(a)) * rad;
       float tw = 0.6 + 0.4 * sin(uTime * (9.0 + 7.0 * h2) + fi * 2.3);
-      float lift = smoothstep(0.0, 0.1, prog - 0.15 * h2);
-      spark += mix(cAvg, vec3(1.0, 0.92, 0.78), 0.6) * exp(-dot(dq, dq) * (36.0 + 40.0 * h2)) * (0.8 + 0.9 * h1) * tw * lift * fade;
+      float rise = smoothstep(0.0, 0.1, prog - 0.15 * h2);
+      spark += mix(cAvg, vec3(1.0, 0.92, 0.78), 0.6) * exp(-dot(dq, dq) * (36.0 + 40.0 * h2)) * (0.8 + 0.9 * h1) * tw * rise * fade;
     }
   }
   // the flare as the body forms, settling into the singer's own light

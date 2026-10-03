@@ -57,7 +57,7 @@ export function createRenderer(canvas, game) {
       premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
   } catch { gl = null; }
 
-  const engr = { lines: null, floor: null, fontReady: false, fontAskedAt: -1, baked: false, bakedFallback: false };
+  const engr = { lines: null, floor: null, fontReady: false, fontAskedAt: -1, bakedFallback: false };
   const api = {
     kind: 'webgl2',
     resize() {}, render() {},
@@ -244,7 +244,7 @@ export function createRenderer(canvas, game) {
       T.wear = tex(game.WEAR || 128, game.WEAR || 128, gl.R8, gl.RED, gl.UNSIGNED_BYTE, null);
       T.felt = null; T.matA = null; T.matB = null; T.crack = null;
       T.engr = tex(1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));   // baked when first needed
-      fieldVer = -1; fieldG = 0; sandVer = -1; sandD = 0; wearVer = -1; ckSig = NaN; engravingsDirty = true; engr.baked = false;
+      fieldVer = -1; fieldG = 0; sandVer = -1; sandD = 0; wearVer = -1; ckSig = NaN; engravingsDirty = true;
       W = 0; H = 0; sceneW = 0; sceneH = 0; matSize = 0; ckSize = 0; enSize = 0;
 
       R.lm = target(LM_SIZE, LM_SIZE);
@@ -527,7 +527,6 @@ export function createRenderer(canvas, game) {
     }
     // Rasterise every segment that reaches into [x0..x1]×[y0..y1] (texels) and upload that region.
     function rasterRect(all, x0, y0, x1, y1) {
-      const S = ckSize;
       const rw = x1 - x0 + 1, rh = y1 - y0 + 1, n = rw * rh;
       if (!(rw > 0 && rh > 0)) return;
       if (ckDist.length < n) {
@@ -613,7 +612,7 @@ export function createRenderer(canvas, game) {
       T.engr = tex(enSize, enSize, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, art, { filter: gl.LINEAR_MIPMAP_LINEAR });
       gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.BROWSER_DEFAULT_WEBGL);
       gl.generateMipmap(gl.TEXTURE_2D);
-      engr.baked = true; engr.bakedFallback = !engr.fontReady;
+      engr.bakedFallback = !engr.fontReady;
     }
 
     // ---- births ---------------------------------------------------------------------------------
