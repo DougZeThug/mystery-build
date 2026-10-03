@@ -168,6 +168,9 @@ function wireInput() {
   // a release the page never saw (focus stolen mid-drag): the browser drops capture; treat it as a cancel
   fxCanvas.addEventListener('lostpointercapture', up);
   fxCanvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  // the middle button plays like the left one: keep the browser from starting autoscroll
+  fxCanvas.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); });
+  fxCanvas.addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); });
   window.addEventListener('keydown', (e) => { if (!game.started) start(); game.tools.key?.(e); });
   bus.on('journal:close', () => { const pt = game.tools.lastPointer?.(); if (pt) setCursor(pt.x, pt.y); else fxCanvas.style.cursor = 'default'; });
 

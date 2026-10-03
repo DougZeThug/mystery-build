@@ -100,8 +100,8 @@ const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const byCountDesc = (a, b) => b.n - a.n;
 const FREE = { walk: 1, feed: 1, sleep: 1, nestle: 1 };
-const EXT_SOURCES = ['bow', 'fork', 'phono', 'floor', 'dream'];
-const PLAYER_SOURCES = ['bow', 'fork', 'phono'];
+const EXT_SOURCES = ['bow', 'drive', 'fork', 'phono', 'floor', 'dream'];
+const PLAYER_SOURCES = ['bow', 'drive', 'fork', 'phono'];
 
 export function createLife(game) {
   const field = game.field, sand = game.sand;

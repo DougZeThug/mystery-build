@@ -453,7 +453,7 @@ export function createField({ G = 160, state = null, bus = null, rng = Math.rand
   return field;
 }
 
-const VIOLENT = ['bow', 'fork', 'phono'];
+const VIOLENT = ['bow', 'fork', 'phono'];   // (the nut's steady drive never tires the bronze)
 const EMPTY = Object.freeze([]);
 
 function sanitizeCrack(c) {

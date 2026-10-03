@@ -21,7 +21,8 @@ test('a fresh keeping shows only what the first birth has shown, and the torn pa
   const pages = keeperPagesFor({ seen: { firstBirth: true }, stats: { births: 1 }, playSeconds: 120 });
   assert.deepEqual(pages.map((p) => p.id), ['leipzig', 'still', 'believed', 'shape', 'below']);
   assert.ok(pages[pages.length - 1].torn);
-  assert.deepEqual(keeperPagesFor({}).map((p) => p.id), pages.map((p) => p.id));
+  // before anything has been born, the book lies open from the start: she has not yet spoken of their singing
+  assert.deepEqual(keeperPagesFor({}).map((p) => p.id), ['leipzig', 'still', 'believed', 'below']);
 });
 
 test('no page speaks of gold, seams, eating, fusion or the finger before its time', () => {
@@ -72,7 +73,7 @@ test('pages come unstuck from flags, stats or the plate itself', () => {
   assert.ok(isUnlocked('firstChoir', { seen: { choir: true } }));
   assert.ok(isUnlocked(['firstGold', 'firstCrack'], { stats: { cracks: 2 } }));
   assert.ok(!isUnlocked('firstDark', { seen: {} }));
-  const all = keeperPagesFor({ seen: { firstCrack: true, firstDark: true, firstChoir: true, firstGold: true, firstFusion: true, firstDeath: true } });
+  const all = keeperPagesFor({ seen: { firstBirth: true, firstCrack: true, firstDark: true, firstChoir: true, firstGold: true, firstFusion: true, firstDeath: true } });
   assert.equal(all.length, KEEPER_PAGES.length);
   assert.equal(all[all.length - 1].id, 'below');
 });

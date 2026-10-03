@@ -75,7 +75,8 @@ export function createProgress(game) {
       if (pop > st.maxPop) st.maxPop = pop;
 
       if (!revealed('jar') && (game.field.coherence.stable > 3.5 || state.playSeconds > 100)) reveal('jar');
-      if (!revealed('journal') && st.births > 0) reveal('journal');
+      // her notebook lies on the felt from the start, once the lamp has warmed up
+      if (!revealed('journal') && (st.births > 0 || (game.started && game.light.level > 0.9) || state.playSeconds > 6)) reveal('journal');
       if (!revealed('drawer') && (speciesCount() >= 3 || (st.births > 0 && state.playSeconds > 260))) {
         reveal('drawer'); reveal('dampers'); state.seen.drawerAt = state.playSeconds;
       }

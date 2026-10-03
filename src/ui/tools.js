@@ -9,6 +9,7 @@ import { createBow } from './tools-bow.js';
 import { createJar, createBook, createCord, createCabinet } from './tools-objects.js';
 import { createPhonograph } from './tools-phono.js';
 import { createMoth } from './tools-moth.js';
+import { createNut } from './tools-nut.js';
 
 const TAP_MS = 220, TAP_PX = 6;          // a click on the plate
 const TAP_MS_TOUCH = 350;                // fingers linger a little longer on a tap
@@ -87,6 +88,9 @@ export function createTools(game) {
   const cabinet = createCabinet(env);
   const phono = createPhonograph(env);
   const moth = createMoth(env, params.has('moth'));
+  let hoverNut = false;
+  env.hoverNut = () => hoverNut;
+  const nut = createNut(env);
   damperSrc = cabinet.collectDampers;
   mothRef = moth.pub;
 
@@ -296,7 +300,7 @@ export function createTools(game) {
     const touch = e && e.pointerType === 'touch';
     p.x = p.x0 = p.sx = x; p.y = p.y0 = p.sy = y; p.t0 = p.st = performance.now(); p.target = null;
     p.type = (e && e.pointerType) || 'mouse'; p.moved = false; p.hold = false; p.kind = null; p.edge = false;
-    if (e && e.button > 0) { freePtr(p); return false; }
+    if (e && e.button === 2) { freePtr(p); return false; }
 
     // the open tray is on top of everything; a press outside it closes it, except on a damper
     // already on the plate (the hand is arranging them, the drawer stays open)
@@ -320,6 +324,8 @@ export function createTools(game) {
     if (isOn('phonograph')) { const ph = phono.hit(x, y, touch); if (ph) { p.kind = 'phono'; p.target = ph; phono.press(ph); return true; } }
     if (isOn('journal') && book.hit(x, y, touch)) { p.kind = 'book'; book.press(true); return true; }
     if (isOn('drawer') && cabinet.hitFront(x, y, touch)) { p.kind = 'front'; return true; }
+    // the clamp at the centre: press and hold to drive the plate from its stem
+    if (nut.held < 0 && nut.hit(x, y)) { nut.press(p.id, x, y); p.kind = 'nut'; return true; }
     // near an edge: a press that becomes a drag snaps the bow in; one that lifts unmoved is a tap
     if (band || env.plateHit(x, y)) { p.kind = 'press'; p.edge = band; return true; }
     freePtr(p);
@@ -342,6 +348,7 @@ export function createTools(game) {
         hoverLabel(x, y);
         book.hover(isOn('journal') && book.hit(x, y, false));
         cabinet.hover(x, y);
+        hoverNut = !!game.view && nut.hit(x, y);
       }
       return;
     }
@@ -358,6 +365,7 @@ export function createTools(game) {
         }
         break;
       case 'bow': bow.samples(e, x, y); break;         // the bow reads the pointer in update, plus its path
+      case 'nut': nut.move(x, y); break;
       case 'jar': case 'cord': break;                  // they read the pointer in update
       case 'book': if (p.moved) { book.press(false); p.kind = 'none'; } break;
       case 'phono': if (p.moved) { phono.release(); p.kind = 'none'; } break;
@@ -388,6 +396,7 @@ export function createTools(game) {
         }
         break;
       case 'bow': bow.drop(); break;
+      case 'nut': nut.release(); break;
       case 'jar': jar.drop(); break;
       case 'cord': if (cancel) cord.release(NaN, NaN); else cord.release(p.x, p.y); break;
       case 'book':
@@ -414,7 +423,7 @@ export function createTools(game) {
   function cursor(x, y) {
     for (let i = 0; i < plist.length; i++) {
       const k = plist[i].kind;
-      if (k && k !== 'press' && k !== 'none' && k !== 'book' && k !== 'front' && k !== 'phono') return 'grabbing';
+      if (k && k !== 'press' && k !== 'none' && k !== 'book' && k !== 'front' && k !== 'phono' && k !== 'nut') return 'grabbing';
     }
     if (!game.view) return 'default';
     // with the drawer open, a press anywhere but the tray or a placed damper only closes it
@@ -426,6 +435,7 @@ export function createTools(game) {
     if (isOn('phonograph') && phono.hit(x, y, false)) return 'pointer';
     if (isOn('journal') && book.hit(x, y, false)) return 'pointer';
     if (isOn('drawer') && cabinet.hitFront(x, y, false)) return 'pointer';
+    if (nut.hit(x, y)) return 'pointer';
     if (edgeNear(x, y, SNAP_PX)) return 'grab';
     return 'default';
   }
@@ -459,6 +469,7 @@ export function createTools(game) {
     if (game.view !== lastView) layout();
     dt = dt > 0 ? Math.min(dt, 0.05) : 0;
     lamp.update();
+    nut.update(dt);
     for (let i = 0; i < KEYS.length; i++) { const w = KEYS[i]; if (want[w] && shown[w] < 1) shown[w] = Math.min(1, shown[w] + dt / FADE_S); }
     // the cord is always there, faintly
     if (!want.cord && shown.cord < 0.55) shown.cord = Math.min(0.55, shown.cord + dt / FADE_S);
@@ -625,6 +636,7 @@ export function createTools(game) {
     moth.drawLanded(ctx, lamp);
     drawRings(ctx);
     drawFinger(ctx);
+    nut.draw(ctx, lamp);
     // on the felt
     if (shown.journal > 0) book.draw(ctx, lamp, alphaOf('journal'));
     if (shown.phonograph > 0) phono.draw(ctx, lamp, alphaOf('phonograph'));
@@ -655,7 +667,8 @@ export function createTools(game) {
     get trayOpen() { return cabinet.trayOpen; },
     openDrawer(open = true) { cabinet.toggle(open); },
     // harness / debug hooks (stable names; used by dev/tools.html)
-    _dev: { bow, jar, book, cord, cabinet, phono, moth, lamp, shown, want, ptrs, summonMoth: () => moth.summon(), tap },
+    get nut() { return nut; },
+    _dev: { bow, jar, book, cord, cabinet, phono, moth, nut, lamp, shown, want, ptrs, summonMoth: () => moth.summon(), tap },
   };
   return tools;
 }

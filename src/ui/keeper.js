@@ -44,7 +44,7 @@ export const KEEPER_PAGES = [
       'I did not drop the bow. I am rather proud of that.',
   },
   {
-    id: 'shape', date: '5th March',
+    id: 'shape', date: '5th March', unlock: 'firstBirth',
     text: 'Each one sings the shape it is made of. Inside it, if you bring the lamp close, is the very ' +
       'figure that made it, turning slowly. When I stop bowing, they keep the plate going by themselves, ' +
       'and the sand goes on arranging itself to their song. I am no longer sure who is ~~playing~~ the player.',
