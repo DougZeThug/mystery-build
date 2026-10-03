@@ -192,6 +192,7 @@ export function loadFonts() {
         document.fonts.load('16px Caveat'),
         document.fonts.load('10px "Old Standard TT"'),
         document.fonts.load('italic 12px "IM Fell English"'),
+        document.fonts.load('12px "IM Fell English SC"'),
       ]).catch(() => {});
     }
   } catch { /* no font loading API */ }

@@ -302,7 +302,7 @@ export function createBow(env) {
   let glintT = 0, idle = 0;
   let pressT = 0;
 
-  function layout() {
+  function layout(force = false) {
     const v = game.view, S = v.plate.size, X0 = v.plate.x, Y0 = v.plate.y;
     const an = v.anchors?.bow || { x: X0 + S * 1.02, y: Y0 + S * 0.62, angle: -1.2 };
     if (v.mode === 'landscape') {
@@ -332,7 +332,7 @@ export function createBow(env) {
       rest.y += (Y0 + S + 1.5) - Math.min(hy0, hy1);
     }
     const dpr = v.dpr || 1;
-    if (!sprites || Math.abs(L - Lbaked) > 0.5 || dpr !== dprBaked) { sprites = bakeBow(L, dpr); Lbaked = L; dprBaked = dpr; }
+    if (force || !sprites || Math.abs(L - Lbaked) > 0.5 || dpr !== dprBaked) { sprites = bakeBow(L, dpr); Lbaked = L; dprBaked = dpr; }
     if (grab.id < 0) { pose.x = rest.x; pose.y = rest.y; pose.a = rest.a; pose.f = rest.f; pose.vx = pose.vy = pose.va = pose.vf = 0; }
   }
 
@@ -677,7 +677,9 @@ export function createBow(env) {
     if (glintT <= 0 || glintT > 1.1) return;
     const ph = 1 - glintT / 1.1;
     const xf = 0.14 + ph * 0.8;
-    const a = Math.sin(ph * Math.PI) * 0.6;
+    // a reflection of the lamp: as bright as the light the stick is lying in, and none in the dark
+    const a = Math.sin(ph * Math.PI) * 0.6 * clamp01(fAvg);
+    if (a < 0.01) return;
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = a;
     ctx.strokeStyle = '#fff0d0';

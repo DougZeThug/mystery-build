@@ -7,6 +7,8 @@
 // createJournal(game, rootEl) -> { open(page?), close(), isOpen, update(dt), toggle(), note(kind, text, data) }
 //   open(page): page = 'flyleaf' | 'keeper' | 'specimens' | 'observations' | <page index>
 // Persistent bookkeeping lives in state.notebook (see nbState()).
+// keeping(t, created, since?) -> { n, period, key, label }: which day and part of day a moment is
+//   ('the third evening'), pure; exported for the tests.
 import * as Modes from '../sim/modes.js';
 import * as Harmony from '../sim/harmony.js';
 import * as Naming from '../sim/naming.js';
@@ -50,7 +52,8 @@ function ordinal(n) {
 }
 function dateOrdinal(d) { const t = d % 100, u = d % 10; return d + (t > 10 && t < 14 ? 'th' : u === 1 ? 'st' : u === 2 ? 'nd' : u === 3 ? 'rd' : 'th'); }
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
-const article = (w) => (/^[aeiou]/i.test(w) ? 'an ' : 'a ') + w;
+const an = (w) => (/^[aeiou]/i.test(String(w || '')) ? 'an' : 'a');     // the article a word takes
+const article = (w) => an(w) + ' ' + w;
 function gcd(a, b) { try { return Harmony.gcd(a, b); } catch { while (b) [a, b] = [b, a % b]; return a || 1; } }
 function clanOf(k) { try { return Harmony.clanOf(k); } catch { let x = k | 0; while (x > 1 && x % 2 === 0) x /= 2; return String(x); } }
 
@@ -63,17 +66,23 @@ function clock(t) {
   return `${h}:${m < 10 ? '0' : ''}${m}\u00a0${ap}`;
 }
 // Which day of the keeping, and which part of it ('the third evening'). Small hours belong to the
-// night before.
-function keeping(t, created) {
+// night before. So does a sitting that runs on past four in the morning (`since`: when the sitting
+// began): until noon its hours stay with the day it began, and until six they are still that
+// night, so one sitting at the plate is never split into two days.
+function dayStart(t) {
+  const d = new Date(t);
+  if (d.getHours() < 4) d.setDate(d.getDate() - 1);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+export function keeping(t, created, since = t) {
   const d = new Date(t), h = d.getHours();
-  const day = new Date(t);
-  if (h < 4) day.setDate(day.getDate() - 1);
-  day.setHours(0, 0, 0, 0);
-  const d0 = new Date(Math.min(created || t, t));
-  if (d0.getHours() < 4) d0.setDate(d0.getDate() - 1);
-  d0.setHours(0, 0, 0, 0);
+  const four = new Date(t); four.setHours(4, 0, 0, 0);
+  const carried = h >= 4 && h < 12 && since < four.getTime();
+  const day = carried ? dayStart(four.getTime() - 1) : dayStart(t);
+  const d0 = dayStart(Math.min(created || t, since, t));
   const n = Math.max(1, Math.round((day - d0) / 86400000) + 1);
-  const period = h < 4 ? 'night' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : h < 21 ? 'evening' : 'night';
+  const period = h < 4 || (carried && h < 6) ? 'night' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : h < 21 ? 'evening' : 'night';
   return { n, period, key: n + period, label: `the ${ordinal(n)} ${period}` };
 }
 
@@ -139,6 +148,33 @@ export function createJournal(game, rootEl) {
   };
   const speciesName = (sp) => sp?.name || st().species?.[sp?.id]?.name || null;
 
+  // Sittings: runs of the log with no silence of SITTING_GAP or more between lines. `when(t)` is the
+  // day and part of day for a moment, counted from the start of the sitting it falls in.
+  const SITTING_GAP = 3 * 3600 * 1000;
+  let sitMemo = null;
+  function sittings() {
+    const log = Array.isArray(st().log) ? st().log : [];
+    const sig = `${log.length}|${log[0]?.t || 0}|${log[log.length - 1]?.t || 0}`;
+    if (sitMemo?.sig === sig) return sitMemo.list;
+    const list = [];                                  // [first t, last t] per sitting, in order
+    for (const e of log) {
+      const t = e?.t;
+      if (!(t > 0)) continue;
+      const cur = list[list.length - 1];
+      if (cur && t >= cur[0] && t - cur[1] < SITTING_GAP) cur[1] = Math.max(cur[1], t);
+      else list.push([t, t]);
+    }
+    sitMemo = { sig, list };
+    return list;
+  }
+  function sittingStart(t) {
+    const list = sittings();
+    let lo = 0, hi = list.length - 1, k = -1;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (list[mid][0] <= t) { k = mid; lo = mid + 1; } else hi = mid - 1; }
+    return k >= 0 && t - list[k][1] < SITTING_GAP ? list[k][0] : t;
+  }
+  const when = (t) => keeping(t, st().created, sittingStart(t));
+
   // =================================================================================================
   // The observations log
   // =================================================================================================
@@ -198,7 +234,7 @@ export function createJournal(game, rootEl) {
     } else if (origin === 'error') {
       s += '. One of them divided, and one half came out not quite the same.';
     } else if (origin === 'waver') {
-      s += '. Rose from the sand, not quite matching the note I held.';
+      s += '. Rose from the sand while they sang, not quite matching their song.';
     } else if (origin === 'sand') {
       s += '. ' + pick(SAND_TAILS, sp.id);
       const v = voiceRemark(ks, sp.id);
@@ -247,7 +283,7 @@ export function createJournal(game, rootEl) {
     const a = speciesName(e.a?.spec) || speciesName({ id: e.a?.sp });
     const b = speciesName(e.b?.spec) || speciesName({ id: e.b?.sp });
     first('fuse', 'fuse', a && b && a !== b
-      ? `A *${a}* and a *${b}* met, and went in two and came out one.`
+      ? `${cap(an(a))} *${a}* and ${an(b)} *${b}* met, and went in two and came out one.`
       : 'Two of them met, and went in two and came out one.');
     if (pendingIs(e.species)) flushPending('fuse', e);
   });
@@ -255,7 +291,7 @@ export function createJournal(game, rootEl) {
     const a = speciesName(e.pred?.spec) || speciesName({ id: e.pred?.sp });
     const b = speciesName(e.prey?.spec) || speciesName({ id: e.prey?.sp });
     first('eat', 'eat', a && b
-      ? `Saw one eat another. A *${a}* took a *${b}* whole, and sang the louder for it.`
+      ? `Saw one eat another. ${cap(an(a))} *${a}* took ${an(b)} *${b}* whole, and sang the louder for it.`
       : 'Saw one eat another. It sang the louder for it.');
   });
   on('mote:death', (e) => {
@@ -295,7 +331,7 @@ export function createJournal(game, rootEl) {
     let edge = '';
     if (c) edge = Math.abs(c[0]) > Math.abs(c[1]) ? (c[0] > 0 ? 'right' : 'left') : (c[1] > 0 ? 'near' : 'far');
     if (first('crack', 'crack', `Asked too much of the plate. A crack, fine as a hair, running in from the ${edge || 'outer'} edge. Every note sounds a little sour now.`)) return;
-    note('crack', n === 2 ? 'A second crack.' : `A ${ordinal(n)} crack. The plate rings sour.`);
+    note('crack', n === 2 ? 'A second crack.' : `${cap(article(ordinal(n)))} crack. The plate rings sour.`);
   });
   on('plate:heal', () => {
     if (first('heal', 'heal', 'The gold ran into the crack and stayed there. The seam glows, and the plate rings true along it.')) return;
@@ -337,7 +373,7 @@ export function createJournal(game, rootEl) {
   on('moth', (e) => {
     if (e.state === 'arrive') {
       if (first('moth', 'moth', 'A moth came to the lamp.')) return;
-      const nb = nbState(), k = keeping(Date.now(), st().created).key;
+      const nb = nbState(), k = when(Date.now()).key;
       if (nb.mothDay !== k) { nb.mothDay = k; note('moth', 'The moth again.'); }
     } else if (e.state === 'land') first('mothLand', 'moth', 'The moth settled on the plate, and they gathered round it.');
   });
@@ -386,7 +422,7 @@ export function createJournal(game, rootEl) {
     const cyl = Array.isArray(s.cylinders) ? s.cylinders[e.index] : null;
     let from = 'the cylinder';
     if (cyl?.t) {
-      const k = keeping(cyl.t, s.created), k0 = keeping(now, s.created);
+      const k = when(cyl.t), k0 = when(now);
       from = k.key === k0.key ? `the cylinder I made earlier ${k.period === 'night' ? 'tonight' : 'this ' + k.period}` : `the cylinder from ${k.label}`;
     }
     const n = nb.phonoPlay = (nb.phonoPlay || 0) + 1;
@@ -461,18 +497,19 @@ export function createJournal(game, rootEl) {
     if (keeperClock < 2) return;
     keeperClock = 0;
     returns(s, nb);
+    // keeperIds: every page of hers the book has ever shown (so a page is announced once, by id)
     const kp = keeperPagesFor(s);
-    if (nb.keeperN == null) nb.keeperN = kp.length;
-    if (kp.length > nb.keeperN) {
-      const fresh = kp.filter((p) => !(nb.keeperIds || []).includes(p.id));
-      nb.keeperN = kp.length;
-      nb.keeperIds = kp.map((p) => p.id);
-      if (fresh.length) {
-        nb.newKeeper = fresh[0].id;
-        note('keeper', nb.f.keeperFound ? pick(KEEPER_FOUND, fresh[0].id) : 'Two of her pages had stuck together. I have parted them.');
-        nb.f.keeperFound = Date.now();
-      }
-    } else if (!nb.keeperIds) nb.keeperIds = kp.map((p) => p.id);
+    if (!Array.isArray(nb.keeperIds)) { nb.keeperIds = kp.map((p) => p.id); return; }
+    const fresh = kp.filter((p) => !nb.keeperIds.includes(p.id));
+    if (!fresh.length) return;
+    nb.keeperIds = nb.keeperIds.concat(fresh.map((p) => p.id));
+    if (!s.seen?.reveal_journal) return;          // not yet found: they are simply there when it is
+    nb.newKeeper = fresh[0].id;
+    const n = fresh.length, again = !!nb.f.keeperFound;
+    note('keeper', n > 1
+      ? (again ? `${cap(words(n))} more of her pages, stuck together at the edges. I have parted them.` : 'Some of her pages had stuck together. I have parted them.')
+      : again ? pick(KEEPER_FOUND, fresh[0].id) : 'Two of her pages had stuck together. I have parted them.');
+    nb.f.keeperFound = Date.now();
   }
 
   // a kind written off that walks again (the phonograph, a dream, a lucky mutation)
@@ -482,12 +519,12 @@ export function createJournal(game, rootEl) {
     for (const id in recs) if (recs[id]?.extinct && !isKeeper(recs[id])) gone.push(id);
     if (!Array.isArray(nb.gone)) { nb.gone = gone; return; }
     const back = nb.back || (nb.back = {});
-    const day = keeping(Date.now(), s.created).key;
+    const day = when(Date.now()).key;
     for (const id of nb.gone) {
       const r = recs[id];
       if (!r || r.extinct || back[id] === day) continue;
       back[id] = day;
-      note('return', r.stats?.returns > 1 ? `*${r.name}* back again.` : `A *${r.name}* again, which I had thought gone.`, { id });
+      note('return', r.stats?.returns > 1 ? `*${r.name}* back again.` : `${cap(an(r.name))} *${r.name}* again, which I had thought gone.`, { id });
     }
     nb.gone = gone;
   }
@@ -530,6 +567,10 @@ export function createJournal(game, rootEl) {
   const ribbons = [...root.querySelectorAll('.nb-rib')];
 
   let isOpen = false, closing = null;
+  let openedAt = -1e9;          // performance.now() at the last open
+  // While the book is still flying out of its place on the felt, a press is the tail of whatever
+  // opened it (a double-click, a hurried second tap), not a page turn or a request to close.
+  const settling = () => performance.now() - openedAt < OPEN_MS;
   let markT = Infinity;         // lines and specimens written after this were unread when the book opened
   let L = null;                 // layout { spread, pw, ph, s, lh, dpr, key }
   let pages = [];               // page descriptors
@@ -553,26 +594,48 @@ export function createJournal(game, rootEl) {
   fontsReady.then(() => { fontsLoaded = true; if (isOpen) { hCache.clear(); rebuild(true); } });
 
   // ---- layout ---------------------------------------------------------------------------------------
+  // The chrome outside the boards must stay on the screen: the close tab above them (it rises a
+  // little when hovered) and the ribbons below (the marked one hangs lowest). Their sizes follow the
+  // scale (see the corners/ribbons/close-tab rules in the stylesheet).
+  const CHROME_GAP = 8;
+  const ribLen = (s) => Math.max(58, 66 * s);
+  const chromeAbove = (s) => Math.ceil(11 * s + 44) + CHROME_GAP;
+  const chromeBelow = (s) => Math.ceil(ribLen(s) - 2) + CHROME_GAP;
   function computeLayout() {
     const vw = window.innerWidth || 1024, vh = window.innerHeight || 768;
-    const margin = clamp(vh * 0.15, 60, 132);          // room for the close tab above, the ribbons below
-    const spread = vw >= 700 && vw / vh >= 1.05 && vh - margin >= 430;
-    let pw, ph;
-    if (spread) {
-      ph = Math.min(vh - margin, 860);
-      pw = ph * 0.7;
-      const maxW = Math.min(vw * 0.94, 1500) - 36;
-      if (pw * 2 > maxW) { pw = maxW / 2; ph = pw / 0.7; }
-    } else {
-      pw = Math.min(vw * 0.88, 560);
-      ph = Math.min(vh - margin, pw * 1.72);
-      if (ph < pw * 1.15) pw = Math.max(Math.min(pw, ph / 1.15), Math.min(vw * 0.88, 300));
-    }
-    pw = Math.floor(pw); ph = Math.floor(ph);
-    const s = Math.min(pw / 440, ph / 640);
+    // side: on a short landscape screen with room to spare left and right, the tab and the ribbons
+    // hang from the fore-edge instead, and the page keeps the height they would have cost
+    const size = (side) => {
+      let s = 1, spread = false, pw = 0, ph = 0, top = 0, bottom = 0;
+      for (let i = 0; i < 3; i++) {              // the chrome scales with the page it surrounds
+        top = side ? Math.ceil(11 * s) + 6 : chromeAbove(s);        // (the boards stand 11s/13s proud)
+        bottom = side ? Math.ceil(13 * s) + 6 : chromeBelow(s);
+        const room = vh - top - bottom;
+        spread = !side && vw >= 700 && vw / vh >= 1.05 && room >= 430;
+        if (spread) {
+          ph = Math.min(room, 860);
+          pw = ph * 0.7;
+          const maxW = Math.min(vw * 0.94, 1500) - 36;
+          if (pw * 2 > maxW) { pw = maxW / 2; ph = pw / 0.7; }
+        } else {
+          pw = Math.min(vw * 0.88, 560);
+          ph = Math.min(room, pw * 1.72);
+          if (ph < pw * 1.15) pw = Math.max(Math.min(pw, ph / 1.15), Math.min(vw * 0.88, 300));
+        }
+        pw = Math.floor(pw); ph = Math.floor(ph);
+        s = Math.min(pw / 440, ph / 640);
+      }
+      // what hangs past the fore-edge: the ribbons, or the close tab, whichever is longer
+      const fits = (vw - pw) / 2 - 6 * s >= Math.max(ribLen(s) - 2, 11 * s + 44) + CHROME_GAP;
+      return { spread, side, pw, ph, s, top, bottom, fits };
+    };
+    let lay = size(false);
+    if (!lay.spread && vw > vh) { const alt = size(true); if (alt.fits && alt.ph > lay.ph) lay = alt; }
+    const { spread, side, pw, ph, s, top, bottom } = lay;
     const lh = Math.max(23, Math.round(30 * s));
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    return { spread, pw, ph, s, lh, dpr, vw, vh, key: `${spread ? 's' : 'p'}${pw}x${ph}@${dpr}` };
+    return { spread, side, pw, ph, s, lh, dpr, vw, vh, top, bottom, cy: (top + vh - bottom) / 2,
+      key: `${spread ? 's' : side ? 'q' : 'p'}${pw}x${ph}@${dpr}` };
   }
   function applyLayout() {
     const prevKey = L?.key;
@@ -583,8 +646,11 @@ export function createJournal(game, rootEl) {
     r.setProperty('--bw', (L.spread ? L.pw * 2 : L.pw) + 'px');
     r.setProperty('--s', L.s.toFixed(4));
     r.setProperty('--lh', L.lh + 'px');
+    r.setProperty('--nb-top', L.top + 'px');
+    r.setProperty('--nb-bottom', L.bottom + 'px');
     root.classList.toggle('nb-spread', L.spread);
     root.classList.toggle('nb-single', !L.spread);
+    root.classList.toggle('nb-side', L.side);
     if (prevKey !== L.key) { hCache.clear(); deckleCache.clear(); skCache.clear(); }
   }
 
@@ -1113,7 +1179,9 @@ export function createJournal(game, rootEl) {
     const ks = r.ks || [];
     const clans = [...new Set((ks.length ? ks.map(clanOf) : [r.clan]).filter((c) => c && c !== '0'))];
     if (!clans.length) return '';
-    const w = clans.map((c) => words(+c).replace(/-/g, '\u2011'));
+    // a clan is named for its lowest voice upon the plate: the octaves of the floor (8, 32) are the
+    // clan of two ('of one' is her line alone, and there is no k 1)
+    const w = clans.map((c) => words(c === '1' ? 2 : +c).replace(/-/g, '\u2011'));
     return clans.length === 1 ? `clan\u00a0of\u00a0${w[0]}` : `clans\u00a0of\u00a0${w.slice(0, -1).join(', ')} and\u00a0${w[w.length - 1]}`;
   }
   function parentsLabel(r) {
@@ -1154,7 +1222,6 @@ export function createJournal(game, rootEl) {
     return items;
   }
   function buildSpecimen(r, no, meas) {
-    const created = st().created;
     const e = el('div', 'nb-sp' + (r.extinct ? ' nb-gone' : '') + ((r.firstSeen || 0) > markT ? ' nb-new' : ''));
     e.dataset.id = r.id;
     const px = Math.round(clamp(92 * L.s, 72, 116));
@@ -1167,7 +1234,7 @@ export function createJournal(game, rootEl) {
     t.appendChild(el('div', 'nb-sp-name', esc(r.name || 'Incertae sedis')));
     const ratio = ratioLabel(r), clan = clanLabel(r);
     t.appendChild(el('div', 'nb-lab', `${esc(ratio)}${clan ? ` <span class="nb-dot">·</span> <span class="nb-lk">${esc(clan)}</span>` : ''}`));
-    const ks = keeping(r.firstSeen || Date.now(), created);
+    const ks = when(r.firstSeen || Date.now());
     t.appendChild(el('div', 'nb-lab', `<span class="nb-lk">first seen</span> ${esc(ks.label)}, ${clock(r.firstSeen || Date.now())}`));
     const living = r.extinct ? 0 : r.count || 0;
     t.appendChild(el('div', 'nb-lab',
@@ -1201,7 +1268,7 @@ export function createJournal(game, rootEl) {
     t.appendChild(el('div', 'nb-sp-name', esc(r.name || 'Vossia fundamentalis')));
     const ratio = ratioLabel(r) || 'k 2';
     t.appendChild(el('div', 'nb-lab', `${esc(ratio)} <span class="nb-dot">·</span> <span class="nb-lk">clan&nbsp;of&nbsp;one</span>`));
-    const ks = keeping(r.firstSeen || Date.now(), st().created);
+    const ks = when(r.firstSeen || Date.now());
     t.appendChild(el('div', 'nb-lab', `<span class="nb-lk">first seen</span> ${esc(ks.label)}, ${clock(r.firstSeen || Date.now())}`));
     t.appendChild(el('div', 'nb-vh nb-vh-count', 'Do not trouble to count me.'));
     e.appendChild(t);
@@ -1244,7 +1311,6 @@ export function createJournal(game, rootEl) {
     return e;
   }
   function buildFloorEntry(meas) {
-    const s = st();
     const e = el('div', 'nb-sp nb-floor');
     const px = Math.round(clamp(92 * L.s, 72, 116));
     const fig = el('div', 'nb-sp-fig');
@@ -1255,7 +1321,7 @@ export function createJournal(game, rootEl) {
     t.appendChild(el('div', 'nb-sp-name', 'the floor'));
     t.appendChild(el('div', 'nb-lab', 'k 2 <span class="nb-dot">·</span> <span class="nb-lk">below the lowest note</span>'));
     const heard = nbState().f.floor;
-    if (heard) t.appendChild(el('div', 'nb-lab', `<span class="nb-lk">heard</span> ${esc(keeping(heard, s.created).label)}, ${clock(heard)}`));
+    if (heard) t.appendChild(el('div', 'nb-lab', `<span class="nb-lk">heard</span> ${esc(when(heard).label)}, ${clock(heard)}`));
     e.appendChild(t);
     e.appendChild(el('div', 'nb-sp-note', 'Five, ten, twenty, forty, all at once. The sand ran to the rim. There was writing under it.'));
     return e;
@@ -1294,7 +1360,7 @@ export function createJournal(game, rootEl) {
     for (let i = 0; i < log.length; i++) {
       const e = log[i];
       if (!e || !e.text) continue;
-      const k = keeping(e.t || Date.now(), s.created);
+      const k = when(e.t || Date.now());
       if (k.key !== lastKey) {
         lastKey = k.key;
         items.push({ key: `day|${k.label}`, keepNext: true, lead: 1, build: () => el('div', 'nb-o-day', esc(cap(k.label)) + '.') });
@@ -1481,10 +1547,11 @@ export function createJournal(game, rootEl) {
     nb.pi = p.n - (secStart[p.sec] || 0);
     nb.atEnd = cur >= nViews() - 1;
   }
+  // keep: stay on the reader's page; 'saved' when the spot was already taken (before a new layout)
   function rebuild(keep) {
     if (!L) applyLayout();
     const nb = nbState();
-    if (keep) saveSpot();
+    if (keep && keep !== 'saved') saveSpot();
     buildPages();
     sig = contentSig();
     if (keep) cur = resolveSpot(nb);
@@ -1611,7 +1678,7 @@ export function createJournal(game, rootEl) {
   function bookFromAnchor() {
     const a = game.view?.anchors?.journal;
     if (!a || !L) return 'translateY(24px) scale(.92)';
-    const cx = L.vw / 2, cy = L.vh / 2;
+    const cx = L.vw / 2, cy = L.cy;
     const sc = clamp(110 / (L.spread ? L.pw * 2 : L.pw), 0.08, 0.5);
     return `translate(${(a.x - cx).toFixed(0)}px, ${(a.y - cy).toFixed(0)}px) scale(${sc.toFixed(3)}) rotate(${game.view.mode === 'landscape' ? -9 : 7}deg)`;
   }
@@ -1651,6 +1718,7 @@ export function createJournal(game, rootEl) {
     nb.readT = Date.now();
     cur = clamp(v ?? 0, 0, Math.max(0, nViews() - 1));
     isOpen = true;
+    openedAt = performance.now();
     root.setAttribute('aria-hidden', 'false');
     renderView();
     saveSpot();
@@ -1697,17 +1765,27 @@ export function createJournal(game, rootEl) {
   function onKey(e) {
     if (!isOpen) return;
     const k = e.key;
+    // a focused ribbon, corner or the close tab is pressed with Space or Enter, as any button is
+    if ((k === ' ' || k === 'Enter') && e.target?.closest?.('button') && book.contains(e.target)) return;
     let used = true;
     if (k === 'Escape') close();
     else if (k === 'ArrowRight' || k === 'PageDown' || k === 'ArrowDown' || k === ' ') go(cur + 1);
     else if (k === 'ArrowLeft' || k === 'PageUp' || k === 'ArrowUp') go(cur - 1);
     else if (k === 'Home') go(0);
     else if (k === 'End') go(nViews() - 1);
-    else if (k === 'Tab') used = false;
+    else if (k === 'Tab') tabWithin(e.shiftKey);
     else used = false;
     if (used) { e.preventDefault(); e.stopPropagation(); }
   }
-  scrim.addEventListener('pointerdown', (e) => { if (isOpen) { e.preventDefault(); close(); } });
+  // the book is modal: Tab goes round its own buttons and never out into the room
+  function tabWithin(back) {
+    const stops = [...book.querySelectorAll('button')].filter((b) => !b.disabled && b.getClientRects().length);
+    if (!stops.length) { book.focus({ preventScroll: true }); return; }
+    const i = stops.indexOf(document.activeElement);
+    const j = i < 0 ? (back ? stops.length - 1 : 0) : (i + (back ? -1 : 1) + stops.length) % stops.length;
+    stops[j].focus({ preventScroll: true });
+  }
+  scrim.addEventListener('pointerdown', (e) => { if (isOpen) { e.preventDefault(); if (!settling()) close(); } });
   btnPrev.addEventListener('click', (e) => { e.stopPropagation(); go(cur - 1); });
   btnNext.addEventListener('click', (e) => { e.stopPropagation(); go(cur + 1); });
   $('.nb-close').addEventListener('click', (e) => { e.stopPropagation(); close(); });
@@ -1719,7 +1797,8 @@ export function createJournal(game, rootEl) {
   // swipes, and a tap on a page's outer margin
   let sw = null;
   book.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('button')) return;
+    sw = null;
+    if (e.target.closest('button') || settling()) return;
     sw = { id: e.pointerId, x: e.clientX, y: e.clientY };
   });
   book.addEventListener('pointerup', (e) => {
@@ -1747,7 +1826,8 @@ export function createJournal(game, rootEl) {
   const onResize = () => {
     if (!isOpen) return;
     clearTimeout(resizeT);
-    resizeT = setTimeout(() => { if (!isOpen) return; finishTurn(); applyLayout(); rebuild(true); }, 120);
+    // the reader's place is read against the old layout, before the pages are laid out anew
+    resizeT = setTimeout(() => { if (!isOpen) return; finishTurn(); saveSpot(); applyLayout(); rebuild('saved'); }, 120);
   };
   on('resize', onResize);
   window.addEventListener('resize', onResize);

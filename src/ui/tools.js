@@ -4,7 +4,7 @@
 // phonograph case, and a rare moth. All drawn procedurally on the 2D overlay canvas (CSS px; main
 // sets the dpr transform), lit by the same lamp the renderer uses.
 import { MODES, evalMode } from '../sim/modes.js';
-import { clamp, smooth, createLamp, loadFonts, bake, bakeShadow, blit, toPlateInto, toScreenInto } from './tools-art.js';
+import { clamp, smooth, createLamp, loadFonts, bake, bakeShadow, bakeTint, blit, blitLit, seeded, toPlateInto, toScreenInto, TAU } from './tools-art.js';
 import { createBow } from './tools-bow.js';
 import { createJar, createBook, createCord, createCabinet } from './tools-objects.js';
 import { createPhonograph } from './tools-phono.js';
@@ -182,6 +182,63 @@ export function createTools(game) {
     } else label.target = 0;
   }
 
+  // ---- hush: when the sound is muted, a small felt pad is pressed onto the felt in a corner ----------
+  // (it settles and fades to a faint trace; unmuting lifts it away)
+  const hush = { spr: null, R: 10, x: 0, y: 0, on: false, seen: false, t: 9 };
+  function bakeHush(S, dpr) {
+    const R = hush.R = Math.round(clamp(S * 0.024, 8, 14)), W = R * 2.6, rnd = seeded(5150);
+    const lit = bake(W, W, W / 2, W / 2, dpr, (g) => {
+      for (let i = 0; i < 120; i++) {             // the fuzzy edge of cut felt
+        const a = rnd() * TAU, r = R * (0.93 + rnd() * 0.12);
+        g.fillStyle = rnd() < 0.5 ? '#8d8880' : '#6c6862'; g.globalAlpha = 0.3 + rnd() * 0.3;
+        g.fillRect(Math.cos(a) * r, Math.sin(a) * r, 0.8, 0.8);
+      }
+      g.globalAlpha = 1;
+      g.beginPath(); g.arc(0, 0, R, 0, TAU);
+      const rg = g.createRadialGradient(-R * 0.3, -R * 0.35, R * 0.1, 0, 0, R);
+      rg.addColorStop(0, '#a29d95'); rg.addColorStop(0.75, '#86827b'); rg.addColorStop(1, '#625e59');
+      g.fillStyle = rg; g.fill();
+      g.save(); g.clip();
+      for (let i = 0; i < 160; i++) {
+        const x = (rnd() - 0.5) * R * 2, y = (rnd() - 0.5) * R * 2, a = rnd() * Math.PI, l = 0.6 + rnd() * 1.8;
+        g.strokeStyle = rnd() < 0.5 ? '#c2beb6' : '#55524d'; g.globalAlpha = 0.12 + rnd() * 0.2; g.lineWidth = 0.4;
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke();
+      }
+      // pressed in the middle, as if a thumb had just held it down
+      const dg = g.createRadialGradient(R * 0.05, R * 0.08, 0, 0, 0, R * 0.5);
+      dg.addColorStop(0, 'rgba(40,38,35,0.35)'); dg.addColorStop(1, 'rgba(40,38,35,0)');
+      g.globalAlpha = 1; g.fillStyle = dg; g.fillRect(-R, -R, R * 2, R * 2);
+      g.restore();
+    });
+    hush.spr = { lit, dark: bakeTint(lit, '#0d0a08'), sh: bakeShadow(lit, Math.max(1.2, R * 0.12)), shSoft: bakeShadow(lit, Math.max(3, R * 0.45)) };
+  }
+  function updateHush(dt) {
+    const m = !!game.audio?.muted;
+    if (!hush.seen) { hush.seen = true; hush.on = m; hush.t = m ? 0 : 9; }
+    else if (m !== hush.on) { hush.on = m; hush.t = 0; }
+    if (hush.t < 9) hush.t += dt;
+  }
+  const HUSH_REST = 0.16;                       // the faint trace left while the sound stays off
+  function drawHush(ctx) {
+    if (!hush.spr || hush.t >= 9) return;
+    const t = hush.t;
+    let a, lift;
+    if (hush.on) { a = smooth(0, 0.35, t) * (1 - (1 - HUSH_REST) * smooth(1.6, 2.4, t)); lift = 1 - smooth(0, 0.4, t); }
+    else { a = t < 0.15 ? HUSH_REST + (1 - HUSH_REST) * (t / 0.15) : 1 - smooth(0.5, 1.3, t); lift = smooth(0.1, 1.2, t); }
+    if (a < 0.005) return;
+    const S = game.view.plate.size, x = hush.x, y = hush.y - lift * hush.R * 0.6;
+    // a corner of the room is dim: the eye still finds a pale thing there, a little
+    const f = Math.max(lamp.at(x, y), 0.22);
+    lamp.offset(x, y, S * (0.003 + 0.05 * lift), off);
+    const sa = (0.25 + 0.75 * lamp.intensity) * a * 0.6;
+    ctx.save(); ctx.translate(x + off.x, y + off.y);
+    blit(ctx, hush.spr.sh, sa * (1 - lift)); blit(ctx, hush.spr.shSoft, sa * lift * 0.7);
+    ctx.restore();
+    ctx.save(); ctx.translate(x, y); const sc = 1 + 0.08 * lift; ctx.scale(sc, sc);
+    blitLit(ctx, hush.spr.lit, hush.spr.dark, a * 0.85, f);
+    ctx.restore();
+  }
+
   // ---- layout ----------------------------------------------------------------------------------------
   let lastView = null;
   let fingerSh = null, fingerRing = null;
@@ -200,19 +257,23 @@ export function createTools(game) {
       g.fillStyle = rg; g.fillRect(-E, -E, E * 2, E * 2);
     });
   }
-  function layout() {
+  let smallKey = '';
+  function layout(force = false) {
     if (!game.view?.plate) return;
     lastView = game.view;
     lamp.layout();
-    const S = game.view.plate.size;
-    bakeFinger(S, game.view.dpr || 1);
+    const S = game.view.plate.size, dpr = game.view.dpr || 1;
+    // sprites are rebaked only when their size changes (each object keeps its own key)
+    const key = `${S}|${dpr}`;
+    if (force || key !== smallKey) { smallKey = key; bakeFinger(S, dpr); bakeHush(S, dpr); dot = null; }
+    const ins = game.view.insets || {};
+    hush.x = (ins.l || 0) + Math.max(22, hush.R * 2.4); hush.y = (ins.t || 0) + Math.max(22, hush.R * 2.4);
     labelFont = `${Math.round(clamp(S * 0.028, 14, 19))}px Caveat, 'Segoe Print', cursive`;
-    dot = null;
-    bow.layout(); jar.layout(); book.layout(); cord.layout(); cabinet.layout(); phono.layout(); moth.layout();
+    bow.layout(force); jar.layout(force); book.layout(force); cord.layout(force); cabinet.layout(force); phono.layout(force); moth.layout(force);
   }
   layout();
   bus.on?.('resize', () => layout());
-  loadFonts().then(() => cabinet.layout());   // the engraved numbers need their face
+  loadFonts().then(() => { book.layout(true); cabinet.layout(true); });   // the gilt initials and engraved numbers need their faces
   // restore persisted dampers
   syncDampers();
 
@@ -426,7 +487,7 @@ export function createTools(game) {
     const hv = game.hold === holdObj ? 1 : 0;
     holdVis += (hv - holdVis) * Math.min(1, dt * (hv ? 3 : 5));
     if (holdPtr) { holdX = holdPtr.x; holdY = holdPtr.y; }
-    else for (let i = 0; i < plist.length; i++) { const p = plist[i]; if (p.kind === 'press') { holdX = p.x; holdY = p.y; } }
+    else for (let i = 0; i < plist.length; i++) { const p = plist[i]; if (p.kind === 'press' && !p.edge) { holdX = p.x; holdY = p.y; } }
 
     // backstop: nothing stays in a hand whose pointer is gone
     if (bow.heldBy >= 0 && !ptrs.has(bow.heldBy)) bow.drop();
@@ -440,6 +501,7 @@ export function createTools(game) {
     cabinet.update(dt, ptrs);
     phono.update(dt);
     moth.update(dt);
+    updateHush(dt);
 
     // label
     if (label.mote && (label.mote.dead || label.mote.state === 'die' || label.mote.state === 'fall')) label.target = 0;
@@ -575,6 +637,7 @@ export function createTools(game) {
     if (shown.jar > 0 && (jar.heldBy >= 0 || jar.lifted)) { jar.drawStream(ctx, lamp); jar.draw(ctx, lamp, alphaOf('jar')); }
     cabinet.drawHeld(ctx, lamp);
     moth.drawFlying(ctx, lamp);
+    drawHush(ctx);
     drawLabel(ctx);
     ctx.restore();
   }

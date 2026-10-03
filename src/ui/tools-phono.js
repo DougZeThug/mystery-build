@@ -192,7 +192,8 @@ export function createPhonograph(env) {
     x = Math.round(x); y = Math.round(y); rackX = Math.round(rackX); rackY = Math.round(rackY);
   }
 
-  function layout() {
+  let bakedKey = '';
+  function layout(force = false) {
     const v = game.view, S = v.plate.size, dpr = v.dpr || 1;
     Pw = Math.round(clamp(S * 0.19, 54, 116));
     Pd = Math.round(Pw * 0.56); Pf = Math.round(Pw * 0.13);
@@ -207,7 +208,9 @@ export function createPhonograph(env) {
     Bw = Math.round(rc * 2 + 14); Rw = Bw + 6 + lw; Rh = Math.round(slotH * MAX_CYL + 10);
     place();
     pub.x = x; pub.y = y; pub.pan = env.panOf(x);
-    bakeAll(dpr);
+    // the sprites depend only on the size and on which side the lamp lights them from
+    const key = `${Pw}|${dpr}|${lampSide(0)}|${lampSide(th)}`;
+    if (force || key !== bakedKey) { bakedKey = key; bakeAll(dpr); }
   }
 
   // ---- sprites ---------------------------------------------------------------------------------

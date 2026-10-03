@@ -7,7 +7,9 @@
 //   \n\n        a new paragraph
 //
 // KEEPER_PAGES entry: { id, date, text, unlock?, sketch?, post?, stain?, torn?, rest?, after? }
-//   unlock   a flag name, or an array of names (any one suffices); see isUnlocked() below
+//   unlock   when the page comes unstuck: a flag name; an array (any one of them suffices); or
+//            { all: [...] } (every one must hold; an entry may itself be an array or an object).
+//            See isUnlocked() below. A page never speaks of a thing before the reader has seen it.
 //   post     a later afterthought at the foot of the page, in a hurried hand
 //   sketch   marginal drawings: { kind: 'mode', mode, label } | { kind: 'ring' | 'crack' | 'thimble' |
 //            'tally' | 'flower', label }
@@ -49,20 +51,20 @@ export const KEEPER_PAGES = [
     sketch: [{ kind: 'mode', mode: '1.4-', label: 'drawn from life, much enlarged' }],
   },
   {
-    id: 'menu', date: '11th March',
+    id: 'menu', date: '11th March', unlock: ['firstDeath', 'firstEat'],
     text: 'They eat what they agree with. A fifth feeds them; a near-miss, a note a hair’s breadth ' +
       'wide of their own, ~~starves~~ thins them to nothing. I have begun to hear the whole room as a menu. ' +
       'The kettle, I am sorry to say, is poison to the small bright ones.',
     stain: 'flower',
   },
   {
-    id: 'union', date: '17th March',
+    id: 'union', date: '17th March', unlock: ['firstFusion', 'firstEat'],
     text: 'Two that agreed walked into one another and came out as one, singing both notes at once.\n\n' +
       'Two that did not agree\u00a0— ~~the smaller~~ I will not describe it. The larger was very pleased.',
     post: 'Later. It has not once stopped singing both notes. I find that I envy it.',
   },
   {
-    id: 'thimble', date: '29th March',
+    id: 'thimble', date: '29th March', unlock: 'firstGold',
     text: 'The old ones go golden, and then they go. Each leaves a little gold upon the bronze, finer ' +
       'than the sand and heavier. I sweep it into a thimble. I do not know what else to do with it, and ' +
       'it seems wrong to throw away.',
@@ -77,7 +79,7 @@ export const KEEPER_PAGES = [
     post: 'I have apologised to it. I do not know whether that was foolish.',
   },
   {
-    id: 'seam', date: '23rd April', unlock: ['firstGold', 'firstCrack'],
+    id: 'seam', date: '23rd April', unlock: { all: ['firstCrack', ['firstGold', 'firstHeal']] },
     text: 'The gold found the crack before I did. It went in like water finding a step, and stayed. ' +
       'Where it has sealed, the plate rings __truer__ than it did when it was whole\u00a0— and this morning ' +
       'something new was born along the seam, veined all through with gold.',
@@ -90,7 +92,7 @@ export const KEEPER_PAGES = [
     post: 'I counted them by their glow: eleven. In the morning, eleven still. I had half expected fewer.',
   },
   {
-    id: 'finger', date: '20th May',
+    id: 'finger', date: '20th May', unlock: ['firstGold', 'longSitting', 'firstNestle'],
     text: 'If I hold my finger very still upon the plate, they come. One by one they sit against it, the ' +
       'way cats sit against a door. I stayed so for an hour, until my arm went dead, and would do it again.',
     sketch: [{ kind: 'ring', label: 'my finger' }],
@@ -143,28 +145,41 @@ export const FLOOR_ENGRAVING = [
   '— M.',
 ];
 
-// Unlock flags, checked against the persistent state (state.seen is set by progress.js; the stats
-// and the plate are consulted too, so a page survives an old save or a missing flag):
+// Unlock flags, checked against the persistent state (state.seen is set by progress.js; the stats,
+// the species records and the plate are consulted too, so a page survives an old save, a missing
+// flag, or a thing that happened while the reader was away):
 //   firstBirth   seen.firstBirth  | stats.births > 0 | any species recorded
+//   firstDeath   seen.firstDeath  | stats.deaths > 0 | any species record with a death of any kind
+//   firstEat     seen.firstEat    | stats.devoured > 0 | any species record that has eaten
 //   firstGold    seen.firstGold   | any species record with an old-age death
-//   firstFusion  seen.firstFusion | stats.fusions > 0
+//   firstFusion  seen.firstFusion | stats.fusions > 0 | any species record that has fused
 //   firstCrack   seen.firstCrack  | stats.cracks > 0 | state.plate.cracks.length > 0
 //   firstHeal    seen.firstHeal   | stats.heals > 0  | any crack healed
+//   firstNestle  seen.firstNestle | any species record that has sat against the resting finger
+//   longSitting  state.playSeconds >= LONG_SITTING (time at the plate, not time away)
 //   firstDark    seen.firstDark
 //   firstChoir   seen.firstChoir  | seen.choir | stats.choirs > 0
 //   floor        seen.floor
 // Any other name is looked up in state.seen directly.
+export const LONG_SITTING = 480;
+const DEATHS = ['ageDeaths', 'hungerDeaths', 'fell', 'eaten'];
+const anyRecord = (s, fn) => Object.values(s.species || {}).some((r) => !!r && fn(r.stats || {}));
 export function isUnlocked(flag, state) {
   if (!flag) return true;
   if (Array.isArray(flag)) return flag.some((f) => isUnlocked(f, state));
+  if (typeof flag === 'object') return Array.isArray(flag.all) ? flag.all.every((f) => isUnlocked(f, state)) : false;
   const s = state || {}, seen = s.seen || {}, st = s.stats || {};
   if (seen[flag]) return true;
   switch (flag) {
     case 'firstBirth': return (st.births || 0) > 0 || Object.keys(s.species || {}).length > 0;
-    case 'firstGold': return Object.values(s.species || {}).some((r) => (r?.stats?.ageDeaths || 0) > 0);
-    case 'firstFusion': return (st.fusions || 0) > 0;
+    case 'firstDeath': return (st.deaths || 0) > 0 || anyRecord(s, (r) => DEATHS.some((k) => (r[k] || 0) > 0));
+    case 'firstEat': return (st.devoured || 0) > 0 || anyRecord(s, (r) => (r.devoured || 0) > 0);
+    case 'firstGold': return anyRecord(s, (r) => (r.ageDeaths || 0) > 0);
+    case 'firstFusion': return (st.fusions || 0) > 0 || anyRecord(s, (r) => (r.fusions || 0) > 0);
     case 'firstCrack': return (st.cracks || 0) > 0 || (s.plate?.cracks?.length || 0) > 0;
     case 'firstHeal': return (st.heals || 0) > 0 || !!s.plate?.cracks?.some?.((c) => c && c.healed);
+    case 'firstNestle': return anyRecord(s, (r) => (r.nestles || 0) > 0);
+    case 'longSitting': return (s.playSeconds || 0) >= LONG_SITTING;
     case 'firstChoir': return !!seen.choir || (st.choirs || 0) > 0;
     default: return false;
   }

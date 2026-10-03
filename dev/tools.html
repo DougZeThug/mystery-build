@@ -70,8 +70,10 @@ if (q.has('clean')) document.getElementById('panel').classList.add('hide');
 
 fx.addEventListener('pointerdown', (e) => { bus.emit('start', {}); if (game.tools.pointerDown(e.clientX, e.clientY, e)) { try { fx.setPointerCapture(e.pointerId); } catch {} e.preventDefault(); } });
 fx.addEventListener('pointermove', (e) => { game.tools.pointerMove(e.clientX, e.clientY, e); fx.style.cursor = game.tools.cursor(e.clientX, e.clientY); });
-fx.addEventListener('pointerup', (e) => game.tools.pointerUp(e.clientX, e.clientY, e));
-fx.addEventListener('pointercancel', (e) => game.tools.pointerUp(e.clientX, e.clientY, e));
+const up = (e) => { game.tools.pointerUp(e.clientX, e.clientY, e); fx.style.cursor = game.tools.cursor(e.clientX, e.clientY); };
+fx.addEventListener('pointerup', up);
+fx.addEventListener('pointercancel', up);
+fx.addEventListener('lostpointercapture', up);   // a release we never saw: tools treats it as a cancel
 addEventListener('keydown', (e) => game.tools.key(e));
 
 document.getElementById('panel').addEventListener('click', (e) => {

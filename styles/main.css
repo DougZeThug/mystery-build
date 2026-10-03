@@ -59,7 +59,9 @@ body { overscroll-behavior: none; -webkit-user-select: none; user-select: none; 
   transition: opacity 0.45s ease;
 }
 .nb.nb-open .nb-scrim { opacity: 1; pointer-events: auto; }
-.nb-stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; padding: 14px 0 0; box-sizing: border-box; }
+/* the stage keeps room above the boards for the close tab and below for the ribbons (journal.js
+   computeLayout sets how much; on short screens they hang from the fore-edge instead) */
+.nb-stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; padding: var(--nb-top, 14px) 0 var(--nb-bottom, 0); box-sizing: border-box; }
 .nb-book {
   position: relative; width: var(--bw); height: var(--ph); pointer-events: auto; outline: none;
   perspective: calc(var(--ph) * 3); touch-action: none; cursor: default;
@@ -383,34 +385,47 @@ body { overscroll-behavior: none; -webkit-user-select: none; user-select: none; 
   background: var(--rib); outline: none; -webkit-tap-highlight-color: transparent;
   clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 84%, 0 100%);
   box-shadow: inset 2px 0 2px rgba(0, 0, 0, 0.25), inset -2px 0 2px rgba(0, 0, 0, 0.3);
-  transform: translateY(-10px); transition: transform 0.25s ease, filter 0.25s ease; filter: brightness(0.86);
+  transform: translateY(-10px); transition: transform 0.25s ease, filter 0.25s ease; filter: brightness(0.97);
 }
 .nb-rib::before { content: ''; position: absolute; inset: 0; background: linear-gradient(to right, rgba(0, 0, 0, 0.25), rgba(255, 255, 255, 0.12) 38%, rgba(255, 255, 255, 0.02) 55%, rgba(0, 0, 0, 0.2)); }
 .nb-rib span {
   position: absolute; left: 0; right: 0; bottom: 27%; text-align: center; font-family: var(--font-label);
-  font-size: max(10.5px, calc(12px * var(--s))); line-height: 1; color: rgba(236, 206, 140, 0.8); text-shadow: 0 1px 0 rgba(0, 0, 0, 0.45);
+  font-size: max(12px, calc(13.5px * var(--s))); line-height: 1; color: rgba(250, 234, 200, 0.94); text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
 }
-.nb-rib:hover, .nb-rib:focus-visible { transform: translateY(-4px); filter: brightness(1); }
-.nb-rib.nb-on { transform: translateY(2px); filter: brightness(1.08); }
-.nb-rib-keeper { --rib: #76261f; }
-.nb-rib-specimens { --rib: #4b5a33; }
-.nb-rib-observations { --rib: #2e3a57; }
-/* the close tab: a black ribbon above the boards. The button is wider and taller than the ribbon it
-   draws, so a fingertip finds it; the boards cover its lower part. */
+.nb-rib:hover, .nb-rib:focus-visible { transform: translateY(-4px); filter: brightness(1.15); }
+.nb-rib.nb-on { transform: translateY(2px); filter: brightness(1.2); }
+.nb-rib-keeper { --rib: #8c2e25; }
+.nb-rib-specimens { --rib: #5a6b3c; }
+.nb-rib-observations { --rib: #3a4a6e; }
+/* the close tab: a dark leather tab above the boards, its edges rubbed pale so it reads against the
+   dark room. The button is wider and taller than the tab it draws, so a fingertip finds it; the
+   boards cover its lower part. */
 .nb-close {
   position: absolute; z-index: 0; top: calc(-11px * var(--s) - 44px); right: calc(30px * var(--s) - 12px);
   width: calc(max(18px, calc(20px * var(--s))) + 24px); height: 58px;
-  padding: 0; border: 0; cursor: pointer; outline: none; background: none; transform: translateY(8px); transition: transform 0.25s ease;
+  padding: 0; border: 0; cursor: pointer; outline: none; background: none; transform: translateY(4px); transition: transform 0.25s ease;
   -webkit-tap-highlight-color: transparent;
+  filter: drop-shadow(0 0 1.5px rgba(236, 206, 150, 0.35)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.5));
 }
 .nb-close::before {
-  content: ''; position: absolute; left: 12px; right: 12px; top: 14px; bottom: 0; background: #1b1512;
+  content: ''; position: absolute; left: 12px; right: 12px; top: 14px; bottom: 0;
+  background: linear-gradient(to right, #6e4a30, #3a271b 22%, #2c1e15 60%, #5a3c27);
   clip-path: polygon(0 0, 50% 14%, 100% 0, 100% 100%, 0 100%);
-  box-shadow: inset 2px 0 2px rgba(255, 255, 255, 0.06), inset -2px 0 2px rgba(0, 0, 0, 0.5);
+  box-shadow: inset 1px 0 0 rgba(226, 190, 140, 0.45), inset -1px 0 0 rgba(226, 190, 140, 0.3);
 }
-.nb-close span { position: absolute; left: 0; right: 0; top: 25px; text-align: center; font-family: var(--font-label); font-size: 13px; line-height: 1; color: rgba(232, 200, 130, 0.6); }
+.nb-close span {
+  position: absolute; left: 0; right: 0; top: 23px; text-align: center; font-family: var(--font-label); font-size: 16px; line-height: 1;
+  color: rgba(246, 230, 196, 0.82); text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
+}
 .nb-close:hover, .nb-close:focus-visible { transform: translateY(0); }
+.nb-close:hover span, .nb-close:focus-visible span { color: rgba(252, 242, 220, 0.96); }
+/* a short screen: the tab and the ribbons hang from the fore-edge, turned a quarter (their labels
+   turned back upright); the marked ribbon still hangs furthest out */
+.nb-side .nb-ribbons { top: calc(var(--ph) - 30px * var(--s)); left: calc(var(--bw) - 4px); flex-direction: row-reverse; transform: rotate(-90deg); transform-origin: 0 0; }
+.nb-side .nb-rib span { transform: rotate(90deg); }
+.nb-side .nb-close { top: calc(30px * var(--s) - 12px); right: auto; left: calc(var(--bw) + 11px * var(--s) + 44px); transform-origin: 0 0; transform: rotate(90deg) translateY(4px); }
+.nb-side .nb-close:hover, .nb-side .nb-close:focus-visible { transform: rotate(90deg); }
 .nb-measure { position: absolute; left: -10000px; top: 0; visibility: hidden; pointer-events: none; }
 .nb-measure .nb-page { position: relative; }
-@media (prefers-reduced-motion: reduce) { .nb-scrim, .nb-rib, .nb-turn i { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .nb-scrim, .nb-rib, .nb-turn i, .nb-close { transition: none; } }
 /* ===== end notebook ===== */

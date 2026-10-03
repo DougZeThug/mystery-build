@@ -89,12 +89,18 @@ export function createJar(env) {
     g.closePath();
   }
 
-  function layout() {
+  let bakedKey = '';
+  function layout(force = false) {
     const v = game.view, S = v.plate.size, dpr = v.dpr || 1;
     Jw = Math.round(clamp(S * 0.145, 44, 96)); Jh = Math.round(Jw * 1.42);
     const an = v.anchors?.jar || { x: v.plate.x - S * 0.34, y: v.plate.y + S * 0.2 };
     restX = an.x; restY = an.y;
     side = restX < v.plate.cx ? 1 : -1;
+    if (heldBy < 0 && !lifted) { pose.x = restX; pose.y = restY; pose.a = 0; }
+    // the glass, cork and sand are baked at this size once
+    const key = `${Jw}|${dpr}`;
+    if (!force && key === bakedKey && spr) return;
+    bakedKey = key;
     Q.x = Jw * 0.13; Q.y = -0.665 * Jh;
     interior = new Path2D(); bodyPath(interior, Jw * 0.055);
     RX[0] = -Jw * 0.45; RY[0] = -0.40 * Jh; RX[1] = Jw * 0.45; RY[1] = -0.40 * Jh;
@@ -180,7 +186,6 @@ export function createJar(env) {
     });
     const sil = bake(W, H, ox, oy, dpr, (g) => { g.beginPath(); bodyPath(g, 0); g.fillStyle = '#000'; g.fill(); g.drawImage(solid.cv, -ox, -oy, W, H); });
     spr = { glass, solid, dark: bakeTint(solid, '#0d0a08'), sh: bakeShadow(sil, Math.max(2, Jw * 0.05)), shSoft: bakeShadow(sil, Math.max(5, Jw * 0.14)) };
-    if (heldBy < 0 && !lifted) { pose.x = restX; pose.y = restY; pose.a = 0; }
   }
 
   function localOf(px, py, o) {
@@ -404,11 +409,15 @@ export function createBook(env) {
   let hovering = false, pressed = false;
   const tmp = { x: 0, y: 0 };
 
-  function layout() {
+  let bakedKey = '';
+  function layout(force = false) {
     const v = game.view, S = v.plate.size, dpr = v.dpr || 1;
     Bw = Math.round(clamp(S * 0.2, 64, 132)); Bh = Math.round(Bw * 1.42);
     const an = v.anchors?.journal || { x: v.plate.x - S * 0.36, y: v.plate.y + S * 0.78 };
     rx = an.x; ry = an.y; ra = v.mode === 'landscape' ? -0.16 : 0.12;
+    const key = `${Bw}|${dpr}`;
+    if (!force && key === bakedKey && spr) return;
+    bakedKey = key;
     const W = Bw * 1.5, H = Bh * 1.5, ox = W / 2, oy = H / 2 - Bh * 0.08;
     const rnd = seeded(1891);
     const lit = bake(W, H, ox, oy, dpr, (g) => {
@@ -616,12 +625,16 @@ export function createCord(env) {
   let heldBy = -1, maxPull = 0, clicked = false;
   const dash = [1.6, 2.2], dash2 = [1.1, 2.7];
 
-  function layout() {
+  let bakedKey = '';
+  function layout(force = false) {
     const v = game.view, S = v.plate.size, dpr = v.dpr || 1;
     const an = v.anchors?.cord || { x: v.plate.cx + S * 0.16, y: 0, len: Math.max(60, v.plate.y * 0.7) };
     ax = an.x; ay = an.y || 0; len = Math.max(40, an.len || 80);
     pw = Math.round(clamp(S * 0.024, 8, 15)); ph = Math.round(pw * 1.75);
     maxS = clamp(S * 0.09, 28, 64);
+    const key = `${pw}|${dpr}`;
+    if (!force && key === bakedKey && spr) return;
+    bakedKey = key;
     const W = pw * 2.4, H = ph * 1.6;
     const lit = bake(W, H, W / 2, ph * 0.15, dpr, (g) => {
       // a turned brass acorn: a small ring, a cross-hatched cup, a smooth polished nut
@@ -798,6 +811,9 @@ export function createCabinet(env) {
   // 'tall': forks stand upright in a deep tray (room below the plate, portrait). 'flat': a wide,
   // shallow tray that fits under the plate in landscape; the forks lie on their sides in columns.
   let flat = false, dRows = 2, dGap = 8, fRows = 7, fPitch = 20, fColW = 100, fZoneX = 0;
+  // each fork's number is stamped in gilt in the baize beside its recess (left of the foot when the
+  // forks lie flat, under it when they stand): fs is its size, numW / numH the room kept for it
+  let fs = 12, numW = 16, numH = 15;
   let spr = null;
   let nForks = 0, specCheck = 0;
   let hoverFront = false;
@@ -831,13 +847,13 @@ export function createCabinet(env) {
   const forkSlot = (fk, o) => {
     if (flat) {
       const col = (fk.i / fRows) | 0, row = fk.i % fRows;
-      o.x = fZoneX + col * fColW + 8;
+      o.x = fZoneX + col * fColW + 8 + numW;
       o.y = trayTop() + ft + 2 + fPitch * (row + 0.5);
       return o;
     }
     const zx0 = divX + 6, zx1 = TX + TW - ft - 4, sw = (zx1 - zx0) / FORK_KS.length;
     o.x = zx0 + sw * (fk.i + 0.5);
-    o.y = trayTop() + TH - 7;
+    o.y = trayTop() + TH - 7 - numH;
     return o;
   };
   const slotAngle = () => (flat ? Math.PI / 2 : 0);
@@ -985,6 +1001,15 @@ export function createCabinet(env) {
         g.save(); g.translate(x + 0.7, y + 0.7); g.rotate(slotAngle()); g.globalAlpha = 0.35; blit(g, bakeTintCache(s, 'light'), 1); g.restore();
         g.save(); g.translate(x, y); g.rotate(slotAngle()); blit(g, s.recess, 0.95); g.restore();
       }
+      // the slot numbers, stamped in gilt (pressed into the nap: a dark lip under each figure)
+      g.font = `${fs}px 'Old Standard TT', Georgia, serif`;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      for (const fk of forks) {
+        forkSlot(fk, tmp);
+        const x = tmp.x - TX + (flat ? -numW / 2 - 1 : 0), y = tmp.y - trayTop() + (flat ? 0.5 : numH / 2 + 1.5);
+        g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillText(String(fk.k), x + 0.5, y + 0.8);
+        g.fillStyle = 'rgba(222,196,132,0.82)'; g.fillText(String(fk.k), x, y);
+      }
       // until the forks are given, their compartment is closed by a lid
       if (!env.isOn('forks')) {
         const lx = divX - TX + 6, lw = TW - ft - lx, ly = by, lh = bh - 1;
@@ -1040,7 +1065,52 @@ export function createCabinet(env) {
     FG.footR = FG.tineW * 0.85;
     FG.yokeR = (FG.gapW + FG.tineW) / 2;
   }
-  function layout() {
+  // the flat tray at depth th; false if its forks would come out too small to handle
+  function layoutFlat(th, v, S) {
+    TH = th;
+    ft = Math.round(clamp(TH * 0.07, 5, 10));
+    TW = Math.round(Math.max(v.anchors?.drawer?.w || S * 0.84, Math.min(v.vw - 24, S * 1.0)));
+    const innerH = TH - ft;
+    // dampers: a 2 × 2 block if it fits, else a row of four
+    dRows = innerH >= rD * 4 + 3 * 4 ? 2 : 1;
+    dGap = dRows === 2 ? clamp((innerH - rD * 4) / 3, 4, Math.max(8, rD * 0.75)) : Math.max(6, Math.min(rD * 0.6, (innerH - rD * 2) / 2));
+    const dZoneW = (4 / dRows) * rD * 2 + (4 / dRows + 1) * dGap;
+    // forks: lying in rows; the fewest rows (the stoutest forks) whose columns keep the drawer
+    // no wider than the plate, else whatever fits the window
+    const Lf = clamp(S * 0.29, 90, 260);      // the longest fork (k = 5)
+    const maxTW = Math.max(TW, S * 1.02);
+    let pickRows = 0, fallback = 7;
+    for (let rows = 1; rows <= 7; rows++) {
+      const tw = ((innerH - 4) / rows - 5) / 3.25;
+      if (tw < 3) { fallback = Math.max(1, rows - 1); break; }
+      const cols = Math.ceil(FORK_KS.length / rows);
+      const nw = Math.round(clamp(((innerH - 4) / rows) * 0.6, 11, 14) * 1.2) + 2;
+      if (ft * 2 + dZoneW + 12 + cols * (Lf + 16 + nw) <= maxTW) { pickRows = rows; break; }
+      fallback = rows;
+    }
+    fRows = pickRows || fallback;
+    const cols = Math.ceil(FORK_KS.length / fRows);
+    fPitch = (innerH - 4) / fRows;
+    fs = Math.round(clamp(fPitch * 0.6, 11, 14)); numW = Math.round(fs * 1.2) + 2; numH = 0;
+    fColW = Lf + 16 + numW;
+    FG.tineW = clamp((fPitch - 5) / 3.25, 2.6, 8);
+    forkWidths();
+    const need = ft * 2 + dZoneW + 12 + cols * fColW;
+    TW = Math.round(Math.min(v.vw - 16, Math.max(TW, need)));
+    const fit = (TW - ft * 2 - dZoneW - 12) / cols;
+    if (need > TW) fColW = Math.max(60 + numW, fit);
+    TX = Math.round(v.plate.cx - TW / 2);
+    TX = clamp(TX, 4, Math.max(4, v.vw - TW - 4));
+    divX = TX + ft + dZoneW;
+    fZoneX = divX + 10;
+    const Lk5 = fColW - 16 - numW;
+    FG.stemLen = Lk5 * 0.32;
+    FG.tineMax = Lk5 - FG.stemLen - FG.yokeR - FG.tineW * 0.6;
+    return need <= TW || fit - 16 - numW >= 52;
+  }
+
+  let bakedKey = '';
+  function layout(force = false) {
     const v = game.view, S = v.plate.size, unit = S / 2, dpr = v.dpr || 1;
     const an = v.anchors?.drawer || { x: v.plate.cx - S * 0.42, y: v.vh - 30, w: S * 0.84, h: 30 };
     FH = Math.round(Math.max(26, an.h || 30));
@@ -1064,55 +1134,32 @@ export function createCabinet(env) {
       FG.tineW = clamp(S * 0.0135, 3.2, 8);
       FG.tineW = Math.min(FG.tineW, (slotW - 6) / 3.3);
       forkWidths();
-      const avail = TH - ft - 14;
+      fs = Math.round(clamp(slotW * 0.36, 11, 14)); numH = fs + 4; numW = 0;
+      const avail = TH - ft - 14 - numH;
       FG.stemLen = avail * 0.3;
       FG.tineMax = avail - FG.stemLen - FG.yokeR - FG.tineW * 0.6;
     } else {
-      TH = Math.max(58, room);
-      ft = Math.round(clamp(TH * 0.07, 5, 10));
-      const innerH = TH - ft;
-      // dampers: a 2 × 2 block if it fits, else a row of four
-      dRows = innerH >= rD * 4 + 3 * 4 ? 2 : 1;
-      dGap = dRows === 2 ? clamp((innerH - rD * 4) / 3, 4, Math.max(8, rD * 0.75)) : Math.max(6, Math.min(rD * 0.6, (innerH - rD * 2) / 2));
-      const dZoneW = (4 / dRows) * rD * 2 + (4 / dRows + 1) * dGap;
-      // forks: lying in rows; the fewest rows (the stoutest forks) whose columns keep the drawer
-      // no wider than the plate, else whatever fits the window
-      const Lf = clamp(S * 0.29, 90, 260);      // the longest fork (k = 5)
-      fColW = Lf + 16;
-      const maxTW = Math.max(TW, S * 1.02);
-      let pickRows = 0, fallback = 7;
-      for (let rows = 1; rows <= 7; rows++) {
-        const tw = ((innerH - 4) / rows - 5) / 3.25;
-        if (tw < 3) { fallback = Math.max(1, rows - 1); break; }
-        const cols = Math.ceil(FORK_KS.length / rows);
-        if (ft * 2 + dZoneW + 12 + cols * fColW <= maxTW) { pickRows = rows; break; }
-        fallback = rows;
-      }
-      fRows = pickRows || fallback;
-      const cols = Math.ceil(FORK_KS.length / fRows);
-      fPitch = (innerH - 4) / fRows;
-      FG.tineW = clamp((fPitch - 5) / 3.25, 2.6, 8);
-      forkWidths();
-      const need = ft * 2 + dZoneW + 12 + cols * fColW;
-      TW = Math.round(Math.min(v.vw - 16, Math.max(TW, need)));
-      if (need > TW) fColW = Math.max(60, (TW - ft * 2 - dZoneW - 12) / cols);
-      TX = Math.round(v.plate.cx - TW / 2);
-      TX = clamp(TX, 4, Math.max(4, v.vw - TW - 4));
-      divX = TX + ft + dZoneW;
-      fZoneX = divX + 10;
-      const Lk5 = fColW - 16;
-      FG.stemLen = Lk5 * 0.32;
-      FG.tineMax = Lk5 - FG.stemLen - FG.yokeR - FG.tineW * 0.6;
+      // a wide, shallow tray: no deeper than the room under the plate when one row of dampers and one
+      // of forks fit there; else 58 px deep (a narrow window cannot lay all seven forks in one row)
+      const minTH = Math.ceil(rD * 2 + 14);
+      if (!layoutFlat(Math.max(minTH, room), v, S)) layoutFlat(Math.max(58, room), v, S);
     }
     countForks();
-    spr = { damper: bakeDamper(dpr) };
-    spr.forks = bakeForks(dpr);
-    spr.front = bakeFront(dpr);
-    spr.frontDark = bakeTint(spr.front, '#0d0a08');
-    spr.tray = bakeTray(dpr);
-    spr.trayForksOn = env.isOn('forks');
-    for (const d of dampers) if (d.state !== 'plate') { slotOf(d, tmp); d.x = tmp.x; d.y = tmp.y; d.state = 'slot'; }
-    for (const fk of forks) { forkSlot(fk, tmp); fk.x = tmp.x; fk.y = tmp.y; fk.a = slotAngle(); fk.va = 0; if (fk.state !== 'slot') fk.state = 'slot'; }
+    // rebake only when the tray's geometry changed (a window dragged wider usually moves it, no more)
+    const key = [dpr, flat, TW, TH, FH, ft, rD, dRows, dGap, fRows, fPitch, fColW, divX - TX, fZoneX - TX,
+      FG.tineW, FG.stemLen, FG.tineMax, fs, numW, numH].map((n) => (typeof n === 'number' ? Math.round(n * 100) : n)).join('|');
+    if (force || key !== bakedKey || !spr) {
+      bakedKey = key;
+      spr = { damper: bakeDamper(dpr) };
+      spr.forks = bakeForks(dpr);
+      spr.front = bakeFront(dpr);
+      spr.frontDark = bakeTint(spr.front, '#0d0a08');
+      spr.tray = bakeTray(dpr);
+      spr.trayForksOn = env.isOn('forks');
+    }
+    // what rests in the tray moves with it; what a hand holds (or is on its way back) is left be
+    for (const d of dampers) if (d.state === 'slot') { slotOf(d, tmp); d.x = tmp.x; d.y = tmp.y; d.vx = d.vy = 0; }
+    for (const fk of forks) if (fk.state === 'slot') { forkSlot(fk, tmp); fk.x = tmp.x; fk.y = tmp.y; fk.a = slotAngle(); fk.vx = fk.vy = fk.va = 0; }
   }
 
   // ---- interaction ------------------------------------------------------------------------------

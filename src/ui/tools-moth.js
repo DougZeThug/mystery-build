@@ -18,9 +18,13 @@ export function createMoth(env, forced = false) {
   let W = 30, spr = null;
   const tmp = { x: 0, y: 0 }, scr = { x: 0, y: 0 };
 
-  function layout() {
+  let bakedKey = '';
+  function layout(force = false) {
     const v = game.view, S = v.plate.size, dpr = v.dpr || 1;
     W = Math.round(clamp(S * 0.075, 22, 48));          // wingspan
+    const key = `${W}|${dpr}`;
+    if (!force && key === bakedKey && spr) return;
+    bakedKey = key;
     const half = W / 2, rnd = seeded(1926);
     // the right-hand wings (mirrored for the left), root at the origin, span along +x
     const wbox = (draw) => bake(half * 1.15, W * 0.95, 1, W * 0.42, dpr, draw);
