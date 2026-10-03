@@ -616,15 +616,16 @@ void main() {
   float code = floor(aB.y + 0.001);
   float flags = aD.w;
   float lift = mod(floor(flags / 16.0), 2.0);
-  // the keeper (flag 64, or a singer of the fundamental itself): larger, slower, a long halo
+  // the keeper (flag 64, or a singer of the fundamental itself): life draws her ~2.2x as large;
+  // here she only gets a longer reach for her halo and her light
   float keeper = max(mod(floor(flags / 64.0), 2.0), 1.0 - step(0.5, aB.z));
-  if (keeper > 0.5) r *= 2.2;
+  float cling = max(mod(floor(flags / 256.0), 2.0), step(10.5, code) * step(code, 11.5));
   vec2 c = aA.xy;
   if (code > 4.5 && code < 5.5) {                       // startled: a shiver
     float ph = h11(r * 5000.0);
     c += vec2(sin(uTime * 61.0 + ph * 9.0), cos(uTime * 53.0 + ph * 7.0)) * r * 0.18 * (1.0 - fract(aB.y));
   }
-  if (code > 10.5 && code < 11.5) {                     // clinging on: a constant fine tremble
+  if (cling > 0.5) {                                    // clinging on: a constant fine tremble
     float ph = h11(r * 7919.0);
     c += vec2(sin(uTime * 83.0 + ph * 11.0) + 0.5 * sin(uTime * 131.0), cos(uTime * 71.0 + ph * 5.0) + 0.5 * cos(uTime * 117.0)) * r * 0.05;
   }
@@ -700,7 +701,7 @@ void main() {
   float lift = bit(flags, 16.0), lunge = bit(flags, 32.0), old = step(0.8, age);
   float keeper = max(bit(flags, 64.0), 1.0 - step(0.5, vB.z));
   float goldDeath = max(bit(flags, 128.0), step(0.97, age));
-  bool cling = code > 10.5 && code < 11.5;
+  bool cling = bit(flags, 256.0) > 0.5 || (code > 10.5 && code < 11.5);
   float phase = fract(r * 9173.31 + vB.z * 0.137 + vB.w * 0.071 + vC.x * 0.05);
   float nc = 1.0 + step(0.5, vC.y) + step(0.5, vD.x);
   vec3 cAvg = (vC1 + (nc > 1.5 ? vC2 : vec3(0.0)) + (nc > 2.5 ? vC3 : vec3(0.0))) / nc;

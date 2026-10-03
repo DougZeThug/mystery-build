@@ -25,7 +25,7 @@ const MAX_SINGERS = 64;
 // encoding (STATES / FLAG); instance data is remapped to these names every frame, so a reordered
 // or extended list on the life side cannot scramble the look.
 const CANON_STATES = ['walk', 'feed', 'split', 'fuse', 'eat', 'startle', 'sleep', 'nestle', 'fall', 'die', 'born', 'cling'];
-const CANON_FLAGS = { aurata: 1, sleep: 2, flash: 4, nestle: 8, float: 16, lunge: 32, keeper: 64, gold: 128 };
+const CANON_FLAGS = { aurata: 1, sleep: 2, flash: 4, nestle: 8, float: 16, lunge: 32, keeper: 64, ageDeath: 128, cling: 256, old: 512 };
 
 const clamp01 = (x) => (x > 0 ? (x < 1 ? x : 1) : 0);
 const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
@@ -133,8 +133,9 @@ export function createRenderer(canvas, game) {
             if (b >= 16) continue;
             let c = CANON_FLAGS[name] || 0;
             if (!c && /keeper/i.test(name)) c = 64;
-            else if (!c && /gold|crumble|agedeath|death/i.test(name)) c = 128;
-            flagMap[b] = c;                               // unknown names (e.g. 'old') are dropped
+            else if (!c && /gold|crumble|death/i.test(name)) c = 128;
+            else if (!c && /cling|grip/i.test(name)) c = 256;
+            flagMap[b] = c;                               // unknown names are dropped
           }
         }
       }
