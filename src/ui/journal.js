@@ -60,7 +60,7 @@ function clock(t) {
   let h = d.getHours();
   const m = d.getMinutes(), ap = h >= 12 ? 'pm' : 'am';
   h = h % 12 || 12;
-  return `${h}:${m < 10 ? '0' : ''}${m} ${ap}`;
+  return `${h}:${m < 10 ? '0' : ''}${m}\u00a0${ap}`;
 }
 // Which day of the keeping, and which part of it ('the third evening'). Small hours belong to the
 // night before.
@@ -1113,7 +1113,7 @@ export function createJournal(game, rootEl) {
     const ks = r.ks || [];
     const clans = [...new Set((ks.length ? ks.map(clanOf) : [r.clan]).filter((c) => c && c !== '0'))];
     if (!clans.length) return '';
-    const w = clans.map((c) => words(+c));
+    const w = clans.map((c) => words(+c).replace(/-/g, '\u2011'));
     return clans.length === 1 ? `clan\u00a0of\u00a0${w[0]}` : `clans\u00a0of\u00a0${w.slice(0, -1).join(', ')} and\u00a0${w[w.length - 1]}`;
   }
   function parentsLabel(r) {

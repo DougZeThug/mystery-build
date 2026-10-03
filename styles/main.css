@@ -53,9 +53,9 @@ body { overscroll-behavior: none; -webkit-user-select: none; user-select: none; 
 }
 .nb-scrim {
   position: absolute; inset: 0; opacity: 0; pointer-events: none;
-  background: radial-gradient(ellipse 80% 70% at 50% 46%, rgba(10, 7, 5, 0.38), rgba(3, 2, 1, 0.84));
-  -webkit-backdrop-filter: blur(4px) saturate(0.75) brightness(0.7);
-  backdrop-filter: blur(4px) saturate(0.75) brightness(0.7);
+  /* No backdrop-filter: a blur over the live, animating plate is re-run every frame and costs more
+     than the whole scene on a phone. The dimming alone is as dark as the old blur + brightness. */
+  background: radial-gradient(ellipse 80% 70% at 50% 46%, rgba(10, 7, 5, 0.56), rgba(3, 2, 1, 0.9));
   transition: opacity 0.45s ease;
 }
 .nb.nb-open .nb-scrim { opacity: 1; pointer-events: auto; }
@@ -395,13 +395,20 @@ body { overscroll-behavior: none; -webkit-user-select: none; user-select: none; 
 .nb-rib-keeper { --rib: #76261f; }
 .nb-rib-specimens { --rib: #4b5a33; }
 .nb-rib-observations { --rib: #2e3a57; }
+/* the close tab: a black ribbon above the boards. The button is wider and taller than the ribbon it
+   draws, so a fingertip finds it; the boards cover its lower part. */
 .nb-close {
-  position: absolute; z-index: 0; top: calc(-11px * var(--s) - 30px); right: calc(30px * var(--s)); width: max(18px, calc(20px * var(--s))); height: 44px;
-  padding: 0; border: 0; cursor: pointer; outline: none; background: #1b1512; transform: translateY(8px); transition: transform 0.25s ease;
+  position: absolute; z-index: 0; top: calc(-11px * var(--s) - 44px); right: calc(30px * var(--s) - 12px);
+  width: calc(max(18px, calc(20px * var(--s))) + 24px); height: 58px;
+  padding: 0; border: 0; cursor: pointer; outline: none; background: none; transform: translateY(8px); transition: transform 0.25s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.nb-close::before {
+  content: ''; position: absolute; left: 12px; right: 12px; top: 14px; bottom: 0; background: #1b1512;
   clip-path: polygon(0 0, 50% 14%, 100% 0, 100% 100%, 0 100%);
   box-shadow: inset 2px 0 2px rgba(255, 255, 255, 0.06), inset -2px 0 2px rgba(0, 0, 0, 0.5);
 }
-.nb-close span { position: absolute; left: 0; right: 0; top: 11px; text-align: center; font-family: var(--font-label); font-size: 13px; line-height: 1; color: rgba(232, 200, 130, 0.6); }
+.nb-close span { position: absolute; left: 0; right: 0; top: 25px; text-align: center; font-family: var(--font-label); font-size: 13px; line-height: 1; color: rgba(232, 200, 130, 0.6); }
 .nb-close:hover, .nb-close:focus-visible { transform: translateY(0); }
 .nb-measure { position: absolute; left: -10000px; top: 0; visibility: hidden; pointer-events: none; }
 .nb-measure .nb-page { position: relative; }
