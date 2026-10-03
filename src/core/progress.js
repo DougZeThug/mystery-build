@@ -44,8 +44,12 @@ export function createProgress(game) {
     if (!e.on) return;
     floorTimer = 18;
     state.seen.floor = true;
+    state.seen.floorPending = true;   // cleared at floor:end; survives a reload mid-Floor
     game.field.setSource('floor', [{ mode: 'floor', amp: 1.2 }]);
   });
+  bus.on('floor:end', () => { state.seen.floorPending = false; });
+  // a Floor that was cut short by leaving still ends (the keeper must still rise)
+  let floorResume = state.seen.floorPending ? 3 : 0;
 
   const speciesCount = () => Object.keys(state.species || {}).length;
 
@@ -53,7 +57,7 @@ export function createProgress(game) {
   let darkFor = 0;
   function dream(dt) {
     if (!game.light.on && !game.tools?.bow?.bowing) darkFor += dt; else darkFor = 0;
-    if (darkFor > 30 && !state.seen.dreamed && Object.values(state.species || {}).some((r) => r.extinct)) {
+    if (darkFor > 30 && !state.seen.dreamed && game.sand?.dreaming && Object.values(state.species || {}).some((r) => r.extinct)) {
       state.seen.dreamed = true;
       bus.emit('log', { kind: 'dream', text: 'In the dark the sand moved by itself, into a figure I had not seen in some time.' });
     }
@@ -63,14 +67,22 @@ export function createProgress(game) {
     reveal, revealed,
     update(dt) {
       dream(dt);
+      if (floorResume > 0 && game.started) {
+        floorResume -= dt;
+        if (floorResume <= 0 && state.seen.floorPending) bus.emit('floor:end', {});
+      }
       state.playSeconds += dt;
       const pop = game.life?.motes?.length || 0;
       if (pop > st.maxPop) st.maxPop = pop;
 
       if (!revealed('jar') && (game.field.coherence.stable > 3.5 || state.playSeconds > 100)) reveal('jar');
       if (!revealed('journal') && st.births > 0) reveal('journal');
-      if (!revealed('drawer') && (speciesCount() >= 3 || (st.births > 0 && state.playSeconds > 260))) { reveal('drawer'); reveal('dampers'); }
-      if (!revealed('forks') && revealed('drawer') && (speciesCount() >= 5 || st.deaths >= 2)) reveal('forks');
+      if (!revealed('drawer') && (speciesCount() >= 3 || (st.births > 0 && state.playSeconds > 260))) {
+        reveal('drawer'); reveal('dampers'); state.seen.drawerAt = state.playSeconds;
+      }
+      // the forks are a discovery of their own, a while after the drawer
+      const sinceDrawer = state.playSeconds - (state.seen.drawerAt ?? -1e9);
+      if (!revealed('forks') && revealed('drawer') && sinceDrawer > 90 && (speciesCount() >= 4 || st.deaths >= 2)) reveal('forks');
       if (!revealed('phonograph') && st.choirs > 0) reveal('phonograph');
 
       // rare-state visual intensities
