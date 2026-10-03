@@ -39,9 +39,9 @@ export const TUNE = {
   driveFrom: 0.1, driveRange: 0.2,
   // the eager plate: while fewer than earlyKinds species are known, a steady played figure quickens
   // a singer in about earlyGestation seconds at full strength (a newcomer will not hold a bow for
-  // half a minute). A touched tuning fork always quickens its exact mode at this pace, and so does
-  // a cylinder replaying a vanished kind.
-  earlyKinds: 3, earlyStable: 1.6, earlyGestation: 7.4,
+  // half a minute); so does a cylinder replaying a vanished kind. A touched tuning fork quickens
+  // its exact mode at forkGestation: one fresh strike, fading over 12 s, is about one singer.
+  earlyKinds: 3, earlyStable: 1.6, earlyGestation: 7.4, forkGestation: 5,
   quickDrop: 0.42,      // quickening spent by each birth
   quickDecay: 0.05,     // per second, for every mode the plate is not coherently holding
   newbornE: 0.55,
@@ -61,7 +61,7 @@ export const TUNE = {
   ageCost: 0.004, crowdK: 21, crowdStress: 0.06, stillPenalty: 0.45, detunePenalty: 9,
   // they sing into the room a bow leaves, and hush when it speaks: by `hush` once the player's
   // drive reaches hushAt, however softly it is played, so the played figure wins the plate
-  voiceRoom: 1.0, hush: 0.75, hushAt: 0.3,
+  voiceRoom: 1.0, hush: 0.75, hushAt: 0.2,
   // division
   splitE: 0.86, splitAge: 25, splitSand: 10, splitCool: 22, splitTake: 10, mutate: 0.06,
   lifeMin: 240, lifeMax: 480, aurataLife: 1.5,
@@ -97,6 +97,7 @@ const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const byCountDesc = (a, b) => b.n - a.n;
 const FREE = { walk: 1, feed: 1, sleep: 1, nestle: 1 };
 const EXT_SOURCES = ['bow', 'fork', 'phono', 'floor', 'dream'];
+const PLAYER_SOURCES = ['bow', 'fork', 'phono'];
 
 export function createLife(game) {
   const field = game.field, sand = game.sand;
@@ -252,7 +253,8 @@ export function createLife(game) {
   }
 
   // A small copying error: one component moves to a neighbouring mode (n±1, m±1, or its mirror).
-  function mutateComps(sp) {
+  // kin: only to a neighbour its kind would not devour (the plate's own song wavers, it does not lie)
+  function mutateComps(sp, kin = false) {
     const i = Math.floor(rng.next() * sp.comps.length);
     const m = modeById(sp.comps[i]);
     const opts = [];
@@ -261,7 +263,8 @@ export function createLife(game) {
       if (n < 1 || mm > 7 || (n === 1 && mm === 1)) return;
       if (n === mm) s = 1;
       const id = `${n}.${mm}${s > 0 ? '+' : '-'}`;
-      if (id !== m.id && modeById(id) && !sp.comps.includes(id)) opts.push(id);
+      const md = id !== m.id && !sp.comps.includes(id) ? modeById(id) : null;
+      if (md && (!kin || consonance(md.k, m.k) > TUNE.eatCons)) opts.push(id);
     };
     if (m.n !== m.m) { tryAdd(m.n, m.m, -m.s); tryAdd(m.n, m.m, -m.s); }   // the mirror, twice: the commonest error
     tryAdd(m.n + 1, m.m, m.s); tryAdd(m.n - 1, m.m, m.s); tryAdd(m.n, m.m + 1, m.s); tryAdd(m.n, m.m - 1, m.s);
@@ -1061,8 +1064,6 @@ export function createLife(game) {
     return false;
   }
 
-  // singers born so far (progress keeps state.stats.births; a bare harness may not)
-  function birthsSoFar() { return Math.max(+(state.stats?.births) || 0, sandBirths); }
   function knownKinds() {
     if (kindsKnown < 0) { kindsKnown = 0; for (const id in state.species) if (id !== KEEPER_ID) kindsKnown++; }
     return kindsKnown;
@@ -1071,12 +1072,64 @@ export function createLife(game) {
   // is anything but the singers driving the plate? (bow, fork, phonograph)
   function isDriven() {
     if (!field.getSource) return true;
-    for (const id of EXT_SOURCES) {
-      if (id === 'floor' || id === 'dream') continue;
+    for (const id of PLAYER_SOURCES) {
       const src = field.getSource(id);
       if (src) for (const c of src) if ((c.amp || 0) > 0.05) return true;
     }
     return false;
+  }
+
+  // how hard the player holds one mode (bow, fork and phonograph together); FORKED: a touched
+  // tuning fork is sounding it
+  let FORKED = false;
+  function driveOn(id) {
+    FORKED = false;
+    if (!field.getSource) return 0;
+    let a = 0;
+    for (const sid of PLAYER_SOURCES) {
+      const src = field.getSource(sid);
+      if (src) for (const c of src) if (c.mode === id && c.amp > 0) { a += c.amp; if (sid === 'fork' && c.amp > 0.05) FORKED = true; }
+    }
+    return a;
+  }
+
+  // A cylinder replaying the figure of a vanished kind brings it back quickly, even played softly,
+  // and a chord as readily as a single note: the extinct record whose every voice the wax is
+  // sounding (the fullest such chord first), held while those voices together hold the plate.
+  let GHOST_SHARE = 0, GHOST_DRIVE = 0;
+  function findGhost(dt) {
+    const src = drivenNow && field.getSource ? field.getSource('phono') : null;
+    let best = null, bestMin = 0;
+    if (src && src.length) {
+      let top = 0;
+      for (const c of src) if (c.amp > top) top = c.amp;
+      for (const id in state.species) {
+        const r = state.species[id];
+        if (!r || !r.extinct || r.aurata || r.keeper || id === KEEPER_ID || !Array.isArray(r.comps) || !r.comps.length) continue;
+        let mn = Infinity;
+        for (const cm of r.comps) {
+          let a = 0;
+          for (const c of src) if (c.mode === cm) { a = c.amp; break; }
+          if (!(a > 0.04 && a >= 0.3 * top)) { mn = 0; break; }
+          if (a < mn) mn = a;
+        }
+        if (mn > 0 && (!best || r.comps.length > best.comps.length || (r.comps.length === best.comps.length && mn > bestMin))) { best = r; bestMin = mn; }
+      }
+    }
+    if (best !== ghostRec) { ghostRec = best; ghostT = 0; }
+    if (!best) return null;
+    let s2 = 0;
+    for (const cm of best.comps) { const a = field.amp ? field.amp(cm) : 0; s2 += a * a; }
+    GHOST_SHARE = field.total > 1e-3 ? s2 / (field.total * field.total) : 0;
+    GHOST_DRIVE = bestMin;
+    ghostT = GHOST_SHARE > TUNE.birthShare ? ghostT + dt : 0;
+    return best;
+  }
+
+  // every mode but the one the plate is holding forgets its quickening, slowly
+  function fadeQuick(dt, keep) {
+    const d = TUNE.quickDecay * dt;
+    for (let i = 0; i < NM; i++) if (i !== keep && quickBy[i] > 0) quickBy[i] = Math.max(0, quickBy[i] - d);
   }
 
   function tryBirth(dt) {
@@ -1085,27 +1138,33 @@ export function createLife(game) {
     const dom = coh.dominant ? modeById(coh.dominant) : null;
     const lightOn = game.light ? game.light.on !== false : true;
     const driven = drivenNow;
-    // a cylinder replaying the figure of a vanished kind brings it back quickly, even played softly
-    const phono = driven && field.getSource ? field.getSource('phono') : null;
-    const revival = !!(phono && dom && state.species?.[dom.id]?.extinct);
-    const minTotal = revival ? 0.16 : driven ? TUNE.birthTotal : TUNE.songTotal;
-    // the first few singers come quickly to a steady bowed figure: the plate is eager to be found out
-    const early = driven && (birthsSoFar() < TUNE.earlyBirths || revival);
-    const coherent = dom && !dom.special && dom.k >= 5 && coh.stable > (early ? TUNE.earlyStable : TUNE.birthStable) &&
-      coh.share > TUNE.birthShare && field.total > minTotal && lightOn && !floorOn && !choirOn;
-    if (!coherent) { quick = Math.max(0, quick - TUNE.quickDecay * dt); return; }
-    if (quickMode !== dom.id) { quick *= 0.75; quickMode = dom.id; }
+    const awake = lightOn && !floorOn && !choirOn;
+    const ghost = awake ? findGhost(dt) : null;
+    let share = coh.share, stable = coh.stable, drive = 0, early = false, forked = false;
+    if (ghost) { share = GHOST_SHARE; stable = ghostT; drive = GHOST_DRIVE; early = true; }
+    else if (driven && dom) {
+      // the player's own note wins the plate however softly it is played (the singers hush for
+      // it); the plate is eager while it is young, and a touched fork always quickens its mode
+      drive = driveOn(dom.id); forked = FORKED;
+      early = drive > 0 && (forked || knownKinds() < TUNE.earlyKinds);
+    }
+    const minTotal = drive > 0 ? TUNE.driveFrom : driven ? TUNE.birthTotal : TUNE.songTotal;
+    const coherent = dom && !dom.special && dom.k >= 5 && awake && stable > (early ? TUNE.earlyStable : TUNE.birthStable) &&
+      share > TUNE.birthShare && field.total > minTotal;
+    if (!coherent) { fadeQuick(dt, -1); return; }
+    const domSp = species[dom.id];
+    const familiar = domSp && domSp.n > 0;
     let rate;
-    if (early) {
-      const from = revival ? 0.1 : TUNE.earlyFrom, range = revival ? 0.22 : TUNE.earlyRange;
-      rate = clamp((field.total - from) / range, 0, 1) * clamp((coh.share - 0.5) / 0.25, 0, 1) / TUNE.earlyGestation;
+    if (drive > 0) {
+      // a new form at driveGestation, a familiar one (its kind already alive) at its quicker pace
+      const gest = forked ? TUNE.forkGestation : early ? TUNE.earlyGestation
+        : familiar ? TUNE.gestation / TUNE.familiar : TUNE.driveGestation;
+      rate = clamp((drive - TUNE.driveFrom) / TUNE.driveRange, 0, 1) * clamp((share - 0.5) / 0.25, 0, 1) / gest;
     } else {
-      // a new form comes a little sooner while the plate is young (fewer than earlyKinds known); a
-      // familiar one (its kind already alive) at its usual, quicker pace
-      const domSp = species[dom.id];
-      const gest = domSp && domSp.n > 0 ? TUNE.gestation / TUNE.familiar
-        : knownKinds() < TUNE.earlyKinds ? TUNE.gestationFew : TUNE.gestation;
-      rate = clamp((field.total - minTotal + 0.08) / 0.6, 0, 1.4) * clamp((coh.share - 0.5) / 0.3, 0, 1) / gest;
+      // the plate's own song: a new form a little sooner while the plate is young (fewer than
+      // earlyKinds known), a familiar one at its usual, quicker pace
+      const gest = familiar ? TUNE.gestation / TUNE.familiar : knownKinds() < TUNE.earlyKinds ? TUNE.gestationFew : TUNE.gestation;
+      rate = clamp((field.total - minTotal + 0.08) / 0.6, 0, 1.4) * clamp((share - 0.5) / 0.3, 0, 1) / gest;
     }
     if (!driven) {                                   // a starving choir quickens nothing
       let se = 0, sn = 0;
@@ -1114,8 +1173,10 @@ export function createLife(game) {
       rate *= Math.pow(Math.max(0, 1 - N / TUNE.songCrowd), 1.5);
     }
     rate *= Math.pow(Math.max(0, 1 - motes.length / CAP), 0.35);
-    quick += rate * dt;
-    if (quick < 1 || birthGap > 0 || motes.length >= CAP) return;
+    const qi = dom.index;
+    fadeQuick(dt, qi);
+    quickBy[qi] += rate * dt;
+    if (quickBy[qi] < 1 || birthGap > 0 || motes.length >= CAP) return;
 
     // choose a pile of sand on a still line
     const peaks = sand?.peaks?.(TUNE.peakMin) || [];
@@ -1137,19 +1198,22 @@ export function createLife(game) {
     if (!best) return;
 
     let comps = [dom.id];
-    const sec = coh.second ? modeById(coh.second) : null;
-    if (sec && !sec.special && sec.k >= 5 && coh.secondShare > TUNE.hybridShare && consonance(dom.k, sec.k) > 0) comps.push(sec.id);
+    if (ghost) comps = ghost.comps.slice();          // the vanished kind itself, chord and all
+    else {
+      const sec = coh.second ? modeById(coh.second) : null;
+      if (sec && !sec.special && sec.k >= 5 && coh.secondShare > TUNE.hybridShare && consonance(dom.k, sec.k) > 0) comps.push(sec.id);
+    }
     const aur = nearHealedSeam(best.u, best.v);
-    let sp = getSpecies(comps, aur, { gen: comps.length > 1 ? 1 : 0, parents: null });
+    let sp = getSpecies(comps, aur, ghost ? { gen: ghost.gen || 0, parents: ghost.parents || null } : { gen: comps.length > 1 ? 1 : 0, parents: null });
+    if (!sp) return;
     if (!driven && rng.next() < TUNE.songWaver) {
-      const mc = mutateComps(sp);
+      const mc = mutateComps(sp, true);
       if (mc) sp = getSpecies(mc, aur, { gen: sp.gen + 1, parents: [sp.id, sp.id] });
     }
     sand?.take?.(best.u, best.v, 0.05, 6);            // the rest is drawn in while it forms
     const m = makeMote(sp, best.u, best.v, TUNE.newbornE, 0, 'born');
     m.gather = 12;
-    sandBirths++;
-    quick -= TUNE.quickDrop;
+    quickBy[qi] -= TUNE.quickDrop;
     birthGap = TUNE.birthGap;
     const isNew = announce(sp);
     bump(sp, 'births');
@@ -1498,6 +1562,11 @@ export function createLife(game) {
 
   // --- persistence ----------------------------------------------------------------------------
   const r4 = (x) => Math.round(x * 1e4) / 1e4, r3 = (x) => Math.round(x * 1e3) / 1e3, r1 = (x) => Math.round(x * 10) / 10;
+  function quickSave() {
+    const out = [];
+    for (let i = 0; i < NM; i++) if (quickBy[i] > 0.005) out.push([MODES[i].id, r3(quickBy[i])]);
+    return out;
+  }
   function serialize() {
     const ms = [];
     const used = new Set();
@@ -1509,7 +1578,7 @@ export function createLife(game) {
       used.add(m.spec);
     }
     return {
-      v: 1, t: r1(T), nextId, q: r3(quick), qm: quickMode, sb: sandBirths,
+      v: 1, t: r1(T), nextId, qs: quickSave(),
       species: [...used].map((s) => [s.id, s.comps, s.aurata ? 1 : 0, s.gen, s.parents]),
       motes: ms, cc: r1(Math.max(0, choirCool)), fc: r1(Math.max(0, floorCool)), fa: floorArmed ? 1 : 0,
       kp,                                            // the keeper: [id, u, v, hx, hy, age, born, phase] | null
@@ -1545,7 +1614,10 @@ export function createLife(game) {
         m.grace = 1; m.dur = 0;
       }
       nextId = Math.max(nextId, obj.nextId | 0, ...motes.map((m) => m.id + 1));
-      T = +obj.t || 0; quick = clamp(+obj.q || 0, 0, 2); quickMode = obj.qm || null; sandBirths = Math.max(0, obj.sb | 0);
+      T = +obj.t || 0;
+      quickBy.fill(0);
+      const qs = Array.isArray(obj.qs) ? obj.qs : obj.qm ? [[obj.qm, obj.q]] : [];   // (older saves kept one)
+      for (const e of qs) { const md = Array.isArray(e) ? modeById(e[0]) : null; if (md && Number.isFinite(+e[1])) quickBy[md.index] = clamp(+e[1], 0, 2); }
       choirCool = +obj.cc || 0; floorCool = +obj.fc || 0; floorArmed = obj.fa !== 0;
     } catch (e) {
       console.warn('[life] could not restore singers', e);
@@ -1716,7 +1788,7 @@ export function createLife(game) {
     moteAt, instanceData, serialize, deserialize, simulateOffline, dream,
     get choir() { return choirOn; },
     get floor() { return floorOn; },
-    get quickening() { return quick; },
+    get quickening() { let q = 0; for (let i = 0; i < NM; i++) if (quickBy[i] > q) q = quickBy[i]; return q; },
     get count() { return N; },
     get dreamingOf() { return dreamKey || null; },
     get keeper() { return keeperMote && !keeperMote.dead ? keeperMote : null; },

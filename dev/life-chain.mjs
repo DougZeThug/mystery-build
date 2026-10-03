@@ -2,6 +2,7 @@
 // For each missing k in the given order, bow (or strike and touch a fork for) its mode until a
 // singer of it is born (or a time limit passes), rest, repeat. Prints how long each birth took.
 //   node dev/life-chain.mjs [order=10,20,40,5] [--via bow|fork] [--seed N] [--limit S] [--max S]
+//                           [--warm modeA,modeB --wait S]   (first raise a population: bow each 30 s, then wait)
 // Bow amplitudes are what a real stroke on that mode can give (modes.bowPick only returns k=5 for
 // slow strokes, and the bow's amp is .25 + .9·speed01); a fork drives .7, fading over 12 s, and is
 // struck again each time it falls quiet.
@@ -47,6 +48,13 @@ function step(bow) {
 const alive = (k) => life.populations().some((p) => !p.keeper && p.ks.includes(k));
 const marks = [];
 function advance(s, bow = null) { const n = Math.round(s / dt); for (let i = 0; i < n; i++) step(bow); }
+const WARM = opt('warm', '');
+if (WARM) {
+  for (const md of WARM.split(',')) { AMP[md] = 0.8; MODE[md] = md; advance(30, md); }
+  advance(+opt('wait', 120));
+  const pops = life.populations().map((p) => `${p.id}:${p.count}`).join(' ');
+  console.log(`warmed: pop ${life.motes.length} at ${Math.round(game.t)} s, kinds ${Object.keys(game.state.species).length}: ${pops}`);
+}
 while (game.t < MAX && floorAt === null) {
   let did = false;
   for (const k of order) {
