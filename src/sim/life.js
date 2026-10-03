@@ -1764,8 +1764,12 @@ export function createLife(game) {
         for (const sp of alive) { const a2 = sp.a * sp.a; sum2 += a2; if (a2 > bv) { bv = a2; best = sp; } }
         const sparse = Math.pow(Math.max(0, 1 - N / TUNE.songCrowd), 1.5);
         if (best && best.nc === 1 && bv / sum2 > TUNE.birthShare && Math.sqrt(sum2) > TUNE.songTotal && rng.next() < 1 - Math.exp(-sparse * h / 40)) {
-          makeMote(best, rng.next() * 1.4 - 0.7, rng.next() * 1.4 - 0.7, TUNE.newbornE, 0, 'walk').dur = 0;
-          births++; bump(best, 'births');
+          let sp = best;                               // and wavers now and then, as it does while watched
+          if (rng.next() < TUNE.songWaver) { const c = mutateComps(sp, true); if (c) sp = getSpecies(c, sp.aurata, { gen: sp.gen + 1, parents: [sp.id, sp.id] }); }
+          makeMote(sp, rng.next() * 1.4 - 0.7, rng.next() * 1.4 - 0.7, TUNE.newbornE, 0, 'walk').dur = 0;
+          births++;
+          if (!state.species[sp.id]) { recordFor(sp).firstSeen = nowMs - agoMs; born.add(sp); }
+          bump(sp, 'births');
         }
       }
       compactMotes();
