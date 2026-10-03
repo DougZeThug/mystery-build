@@ -518,7 +518,7 @@ void main() {
     // the floor: the whole plate one slow white-gold breath
     if (uFloor > 0.0) {
       float pulse = 0.6 + 0.4 * sin(uTime * 2.2);
-      emiss += vec3(1.0, 0.86, 0.6) * uFloor * (0.04 + 0.2 * vib * vib) * pulse * bare;
+      emiss += vec3(1.0, 0.80, 0.52) * uFloor * (0.025 + 0.12 * vib * vib) * pulse * bare;
     }
 
     // ---- centre clamp: steel hex nut on a turned washer ----------------------------------------

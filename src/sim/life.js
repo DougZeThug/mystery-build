@@ -64,10 +64,10 @@ export const TUNE = {
   // (trembling, creeping toward stillness). Its grip (clingBase + clingE·e seconds) drains only
   // while the player drives the plate; when it runs out the singer is THROWN (the only way to fall).
   // Near a resting finger, a landed moth or a felt damper a singer never loses its grip.
-  clingV: 0.55, clingOver: 0.5, clingCalm: 0.45, clingCreep: 0.45, braceHarm: 0.35,
-  clingBase: 1.6, clingE: 2.4, clingDrain: 0.7, clingDrainV: 0.6, clingRegen: 0.3, clingDazed: 0.35,
-  clingMin: 1.8, clingMinE: 1.4,   // every throw follows at least this long a cling (s, + clingMinE·e)
-  throwBase: 0.6, throwV: 0.9, throwOver: 0.6, shelterHold: 0.26, shelterDamper: 0.15,
+  clingV: 0.55, clingOver: 0.5, clingCalm: 0.8, clingCreep: 0.45, braceHarm: 0.35,
+  clingBase: 1.6, clingE: 2.4, clingDrain: 0.7, clingDrainV: 0.6, clingRegen: 0.15, clingDazed: 0.35,
+  clingMin: 1.2, clingMinE: 1.0,   // and every throw follows at least this long a cling (s, + clingMinE·e)
+  throwBase: 0.9, throwV: 0.9, throwOver: 0.6, shelterHold: 0.26, shelterDamper: 0.15,
   // the keeper (after the first Floor): one, immortal, walks the rim
   keeperR: 2.2, keeperSpeed: 0.028, keeperRun: 0.16, keeperRim: 0.8, keeperDelay: 2.5, keeperBorn: 4.5,
   keeperReach: 0.25, keeperComfort: 0.015, keeperWait: 12, keeperGlow: 0.86,

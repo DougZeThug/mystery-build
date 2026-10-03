@@ -576,12 +576,12 @@ export function createRenderer(canvas, game) {
 
       // darkness reveals the phosphor marks slowly; light hides them quickly
       const dark = Lt.on === false ? 1 : 0;
-      engrOn += (dark - engrOn) * Math.min(1, dt * (dark ? 0.35 : 1.4));
-      const engrVis = engrOn * (1 - level) * (1 - level);
       const floorTarget = game.state?.seen?.floor ? 1 : floorFx;
+      engrOn += (dark - engrOn) * Math.min(1, dt * (dark ? 0.35 : 1.4));
       floorEngr += (floorTarget - floorEngr) * Math.min(1, dt * 0.25);
       // a renderer that starts on a plate already seen through (a reload) starts revealed
       if (info.frames === 0) { engrOn = dark; floorEngr = floorTarget; phonoK = phOn; }
+      const engrVis = engrOn * (1 - level) * (1 - level);
 
       uploadField(); uploadSand(); uploadWear(); updateCracks(t); updateEngravings(t);
 
