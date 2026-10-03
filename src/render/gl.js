@@ -103,7 +103,8 @@ export function createRenderer(canvas, game) {
     const queries = [], inFlight = [];
     const ivRing = new Float32Array(96), ivSort = new Float32Array(96);
     let ivN = 0, ivI = 0;
-    const pace = { last: 0, refresh: 16.7, ivEma: 16.7, gpu: -1, gpuN: 0, stale: 0, slowFor: 0, fastFor: 0, wait: 8, upAt: -1e9, open: false, pinned: 0 };
+    const pace = { last: 0, refresh: 16.7, ivEma: 16.7, gpu: -1, gpuN: 0, stale: 0, slowFor: 0, fastFor: 0, wait: 8, upAt: -1e9,
+      downAt: -1e9, downIv: 0, open: false, pinned: 0 };
     // render target formats, best first (see init)
     let rtFmts = [], rtFmt = null;
     let aniso = null;
@@ -915,6 +916,13 @@ export function createRenderer(canvas, game) {
         slow = gpu > P.refresh * 0.85;
         fast = gpu * (up / scale) * (up / scale) < P.refresh * 0.6;   // cost follows the pixel count
       } else {
+        // a steady slower rate that not even the smallest scene changes is the browser's own cap
+        // (a 30 Hz power saver), not the GPU: learn it as the refresh and go back to full size
+        if (scale < 0.75 && P.downIv > 0 && now - P.downAt > 3000 && P.ivEma > P.downIv * 0.9) {
+          P.refresh = Math.max(P.refresh, P.ivEma / 1.05); P.downIv = 0;
+          setScale(1);
+          return;
+        }
         slow = P.ivEma > P.refresh * 1.3;
         fast = P.ivEma < P.refresh * 1.1;
       }
@@ -923,6 +931,8 @@ export function createRenderer(canvas, game) {
       let next = scale;
       if (P.slowFor > 2.5 && scale > 0.71) {
         next = scale > 0.9 ? 0.85 : 0.7;
+        if (scale > 0.9) P.downIv = P.ivEma;            // the pace before any reduction
+        P.downAt = now;
         // a step up that did not hold: wait longer before the next try (8 s, 16 s ... 2 min)
         if (now - P.upAt < 6000) P.wait = Math.min(120, P.wait * 2);
       } else if (P.fastFor > (useGpu ? 5 : P.wait) && scale < 0.99) {
