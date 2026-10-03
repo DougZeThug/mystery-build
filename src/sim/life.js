@@ -43,6 +43,9 @@ export const TUNE = {
   newbornE: 0.55,
   // chorus (what the population sings into the plate)
   chorusAmp: 0.42, chorusCount: 3, chorusMax: 0.9, breathDepth: 0.2, darkVoice: 0.6, voiceE: 0.4,
+  // in darkness the bronze carries only a whisper of their sleep song (so the still plate can dream
+  // of the dead); the sleepers still hear one another in full, so it feeds them as before
+  darkField: 0.06,
   // energy
   feedGain: 0.1,         // dE/dt from agreeable sound (soft-saturated feed)
   harm: 0.55,            // ...and from disagreeable sound, relative (discord starves more slowly than harmony feeds)
@@ -62,7 +65,9 @@ export const TUNE = {
   speedMin: 0.035, speedMax: 0.09, overdriveA: 0.95, rBase: 0.038, rComp: 0.008,
   // violence: at a strong antinode (V = F·A + clingOver·overdrive > clingV) a singer first CLINGS
   // (trembling, creeping toward stillness). Its grip (clingBase + clingE·e seconds) drains only
-  // while the player drives the plate; when it runs out the singer is THROWN (the only way to fall).
+  // while the player drives the plate (bow, fork, phonograph), and comes back only as the plate
+  // stops screaming; when it runs out, after at least clingMin + clingMinE·e seconds of this
+  // cling, the singer is THROWN (the only way to fall: a throw near the rim carries it over).
   // Near a resting finger, a landed moth or a felt damper a singer never loses its grip.
   clingV: 0.55, clingOver: 0.5, clingCalm: 0.8, clingCreep: 0.45, braceHarm: 0.35,
   clingBase: 2.4, clingE: 2.8, clingDrain: 0.7, clingDrainV: 0.6, clingRegen: 0.15, clingDazed: 0.15,
@@ -409,8 +414,10 @@ export function createLife(game) {
     const scale = tot > TUNE.chorusMax ? TUNE.chorusMax / tot : 1;
     if (scale < 1) { for (let i = 0; i < NM; i++) chorusAmp[i] *= scale; for (const sp of alive) sp.a *= scale; }
     chorusOut.length = 0;
+    const toField = dark ? TUNE.darkField : 1;
     for (let i = 0; i < NM; i++) {
-      if (chorusAmp[i] > 0.002) { const c = chorusPool[i]; c.amp = Math.round(chorusAmp[i] * 500) / 500; chorusOut.push(c); }
+      const a = chorusAmp[i] * toField;
+      if (a > 0.002) { const c = chorusPool[i]; c.amp = Math.round(a * 500) / 500; chorusOut.push(c); }
     }
   }
 
@@ -418,8 +425,10 @@ export function createLife(game) {
   function computeFeed(fromChorus) {
     actN = 0;
     let heard2 = 0;
+    const direct = !fromChorus && darkNow ? 1 - TUNE.darkField : 0;   // the sleep song, heard through the air
     for (let i = 0; i < NM; i++) {
-      const a = fromChorus ? chorusAmp[i] : (field.ampIndex ? field.ampIndex(i) : field.amp(MODES[i].id));
+      let a = fromChorus ? chorusAmp[i] : (field.ampIndex ? field.ampIndex(i) : field.amp(MODES[i].id));
+      if (direct) a += chorusAmp[i] * direct;
       if (a > 0.003) { actIdx[actN] = i; actAmp[actN] = a; actN++; heard2 += a * a; }
     }
     // past a certain loudness they hear no more (an over-driven plate is noise to them, and starves

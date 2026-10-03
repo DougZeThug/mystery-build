@@ -35,7 +35,7 @@ export function createPhonograph(env) {
   // ---- geometry (CSS px; body-local origin = centre of the top face) -----------------------------
   let x = 0, y = 0, Pw = 100, Pd = 56, Pf = 13, Lc = 52, Dc = 19, cyX = 0, cyY = 0, Hl = 100, Rb = 34, r0 = 3.5, th = -Math.PI / 2;
   let rodY = 0, Rr = 8.5, crankX = 0, crankY = 0, Ra = 9;
-  let rackX = 0, rackY = 0, Rw = 140, Rh = 90, slotH = 26, rc = 10, lw = 100;
+  let rackX = 0, rackY = 0, Rw = 140, Rh = 90, Bw = 36, slotH = 26, rc = 10, lw = 100;   // Rw: rail + tags; Bw: the rail
   let spr = null, slots = [], slotsSig = '', fontTries = 0;
   const tmp = { x: 0, y: 0 };
 
@@ -133,7 +133,7 @@ export function createPhonograph(env) {
     crankX = Pw / 2; crankY = Pd * 0.12; Ra = Pw * 0.09;
     slotH = Math.round(Math.max(19, Pw * 0.25)); rc = Math.min(slotH * 0.36, Pw * 0.1);
     lw = Math.round(Math.max(88, Pw * 0.98));
-    Rw = Math.round(rc * 2 + 16 + lw + 8); Rh = Math.round(slotH * MAX_CYL + 10);
+    Bw = Math.round(rc * 2 + 14); Rw = Bw + 6 + lw; Rh = Math.round(slotH * MAX_CYL + 10);
     place();
     bakeAll(dpr);
   }
@@ -329,24 +329,28 @@ export function createPhonograph(env) {
 
   function bakeRack(dpr) {
     const rnd = seeded(1903);
-    return bake(Rw + 4, Rh + 4, 2, 2, dpr, (g) => {
-      g.beginPath(); roundRectPath(g, 0, 0, Rw, Rh, 3);
+    // a narrow oak rail with three turned pegs; the tags lie on the felt beside it
+    return bake(Bw + 4, Rh + 4, 2, 2, dpr, (g) => {
+      g.beginPath(); roundRectPath(g, 0, 0, Bw, Rh, 3);
       g.save(); g.clip();
-      woodGrain(g, rnd, 0, 0, Rw, Rh, '#4a2a16', '#25130a', '#734628', true, 26);
-      g.fillStyle = 'rgba(255,215,170,0.2)'; g.fillRect(0, 0, Rw, 1.2); g.fillRect(0, 0, 1.2, Rh);
-      g.fillStyle = 'rgba(0,0,0,0.45)'; g.fillRect(0, Rh - 1.6, Rw, 1.6); g.fillRect(Rw - 1.4, 0, 1.4, Rh);
+      woodGrain(g, rnd, 0, 0, Bw, Rh, '#80562f', '#43290f', '#ad7d4a', false, 16);
+      g.fillStyle = 'rgba(255,225,180,0.3)'; g.fillRect(0, 0, Bw, 1.2); g.fillRect(0, 0, 1.2, Rh);
+      g.fillStyle = 'rgba(0,0,0,0.5)'; g.fillRect(0, Rh - 1.6, Bw, 1.6); g.fillRect(Bw - 1.4, 0, 1.4, Rh);
       g.restore();
-      g.strokeStyle = 'rgba(20,10,4,0.5)'; g.lineWidth = 0.6; g.beginPath(); roundRectPath(g, 0.3, 0.3, Rw - 0.6, Rh - 0.6, 3); g.stroke();
+      g.strokeStyle = 'rgba(30,16,6,0.55)'; g.lineWidth = 0.6; g.beginPath(); roundRectPath(g, 0.3, 0.3, Bw - 0.6, Rh - 0.6, 3); g.stroke();
       for (let i = 0; i < MAX_CYL; i++) {
-        const cx = 8 + rc, cy = 5 + slotH * (i + 0.5);
-        // a turned recess and the felt-covered peg a cylinder slips over
+        const cx = Bw / 2, cy = 5 + slotH * (i + 0.5);
+        // a shallow turned recess and the peg a cylinder slips over
         const rg = g.createRadialGradient(cx - rc * 0.2, cy - rc * 0.2, rc * 0.2, cx, cy, rc * 1.15);
-        rg.addColorStop(0, '#1d120a'); rg.addColorStop(0.85, '#0f0905'); rg.addColorStop(1, '#070402');
-        g.beginPath(); g.arc(cx, cy, rc * 1.12, 0, TAU); g.fillStyle = rg; g.fill();
-        g.strokeStyle = 'rgba(255,210,160,0.18)'; g.lineWidth = 0.6;
-        g.beginPath(); g.arc(cx, cy, rc * 1.12, Math.PI * 0.05, Math.PI * 0.8); g.stroke();
-        g.beginPath(); g.arc(cx, cy, rc * 0.5, 0, TAU); g.fillStyle = '#2f3b2f'; g.fill();
-        if (i > 0) { g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(5, 5 + slotH * i, Rw - 10, 0.7); g.fillStyle = 'rgba(255,215,170,0.08)'; g.fillRect(5, 5.7 + slotH * i, Rw - 10, 0.5); }
+        rg.addColorStop(0, '#3a2410'); rg.addColorStop(0.8, '#24150a'); rg.addColorStop(1, '#120a04');
+        g.beginPath(); g.arc(cx, cy, rc * 1.1, 0, TAU); g.fillStyle = rg; g.fill();
+        g.strokeStyle = 'rgba(255,220,170,0.3)'; g.lineWidth = 0.6;
+        g.beginPath(); g.arc(cx, cy, rc * 1.1, Math.PI * 0.05, Math.PI * 0.8); g.stroke();
+        g.beginPath(); g.arc(cx + 0.6, cy + 0.8, rc * 0.42, 0, TAU); g.fillStyle = 'rgba(0,0,0,0.45)'; g.fill();
+        g.beginPath(); g.arc(cx, cy, rc * 0.4, 0, TAU);
+        const pg = g.createRadialGradient(cx - rc * 0.15, cy - rc * 0.15, rc * 0.04, cx, cy, rc * 0.4);
+        pg.addColorStop(0, '#c99a64'); pg.addColorStop(1, '#5e3c1e');
+        g.fillStyle = pg; g.fill();
       }
     });
   }
@@ -355,21 +359,24 @@ export function createPhonograph(env) {
   function bakeSlot(dpr, c, i) {
     const rnd = seeded(((c.t || 0) % 100000) + i * 7);
     const H = slotH;
-    return bake(Rw, H, 0, H / 2, dpr, (g) => {
-      const cx = 8 + rc;
+    return bake(Rw + 4, H, 0, H / 2, dpr, (g) => {
+      const cx = Bw / 2;
       // wax, upright: a ring round its hollow core, lit from the lamp's side
       g.beginPath(); g.arc(cx + 0.8, 1.2, rc, 0, TAU); g.fillStyle = 'rgba(0,0,0,0.5)'; g.fill();
       g.beginPath(); g.arc(cx, 0, rc, 0, TAU);
       const wg = g.createRadialGradient(cx - rc * 0.35, -rc * 0.4, rc * 0.1, cx, 0, rc);
-      wg.addColorStop(0, '#b48a5c'); wg.addColorStop(0.5, '#5e3d22'); wg.addColorStop(1, '#24150b');
+      wg.addColorStop(0, '#e2b87c'); wg.addColorStop(0.45, '#8f6034'); wg.addColorStop(1, '#3a2210');
       g.fillStyle = wg; g.fill();
-      g.strokeStyle = 'rgba(255,230,190,0.35)'; g.lineWidth = 0.6;
+      g.strokeStyle = 'rgba(30,16,6,0.6)'; g.lineWidth = 0.5; g.stroke();
+      g.strokeStyle = 'rgba(255,240,210,0.55)'; g.lineWidth = 0.7;
       g.beginPath(); g.arc(cx, 0, rc * 0.8, Math.PI * 1.05, Math.PI * 1.6); g.stroke();
-      g.beginPath(); g.arc(cx, 0, rc * 0.52, 0, TAU); g.fillStyle = '#0b0705'; g.fill();
+      g.beginPath(); g.arc(cx, 0, rc * 0.5, 0, TAU); g.fillStyle = '#100a06'; g.fill();
       g.strokeStyle = 'rgba(255,220,180,0.25)'; g.lineWidth = 0.5;
       g.beginPath(); g.arc(cx, 0, rc * 0.52, Math.PI * 0.1, Math.PI * 0.7); g.stroke();
-      // the tag: a strip of cream card, pinned, written in graphite
-      const tx = cx + rc + 8, tw = lw, thh = Math.min(H - 4, Math.max(14, H * 0.74));
+      // the tag: a strip of cream card on a twist of thread, written in graphite
+      const tx = Bw + 6, tw = lw - 4, thh = Math.min(H - 4, Math.max(14, H * 0.74));
+      g.strokeStyle = 'rgba(200,185,150,0.55)'; g.lineWidth = 0.5;
+      g.beginPath(); g.moveTo(cx + rc * 0.75, -rc * 0.3); g.quadraticCurveTo(cx + rc + 4, rc * 0.6, tx + 4, 0); g.stroke();
       g.save();
       g.translate(tx, 0); g.rotate((rnd() - 0.5) * 0.05);
       g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(1, -thh / 2 + 1.2, tw, thh);
@@ -556,7 +563,7 @@ export function createPhonograph(env) {
 
   // ---- the carried cylinder --------------------------------------------------------------------
   function startFly(cyl, toRack, slot) { fly.on = true; fly.t = 0; fly.cyl = cyl; fly.toRack = toRack; fly.slot = slot; }
-  const slotPos = (i, o) => { o.x = rackX + 8 + rc; o.y = rackY + 5 + slotH * (i + 0.5); return o; };
+  const slotPos = (i, o) => { o.x = rackX + Bw / 2; o.y = rackY + 5 + slotH * (i + 0.5); return o; };
   const mandrelPos = (o) => { o.x = x + cyX; o.y = y + cyY; return o; };
 
   // ---- pointer ---------------------------------------------------------------------------------
@@ -600,8 +607,11 @@ export function createPhonograph(env) {
   }
 
   // ---- update ----------------------------------------------------------------------------------
+  let sigT = 0;
   function update(dt) {
     if (!spr) return;
+    sigT -= dt;
+    if (sigT <= 0) { sigT = 0.5; rebakeSlots(); }
     const recording = mode === 'rec', playing = mode === 'play' && play.t >= 0;
     if (recording) {
       rec.t += dt;
@@ -657,7 +667,7 @@ export function createPhonograph(env) {
       const c = Math.cos(ph);
       if (c < 0.12) continue;
       const yy = -Math.sin(ph) * Dc * 0.46, xx = -Lc / 2 + 3 + MARKS[i][0] * (Lc - 6);
-      ctx.globalAlpha = alpha * f * 0.35 * c;
+      ctx.globalAlpha = alpha * f * 0.6 * c;
       ctx.beginPath(); ctx.moveTo(xx, yy - c * 1.4); ctx.lineTo(xx + 0.3, yy + c * 1.4); ctx.stroke();
     }
     ctx.globalAlpha = 1;
@@ -681,7 +691,7 @@ export function createPhonograph(env) {
     const fr = lamp.at(rackX + Rw / 2, rackY + Rh / 2);
     ctx.save(); ctx.globalAlpha = lamp.shadowAt(rackX, rackY) * alpha * 0.45; ctx.fillStyle = '#000';
     lamp.offset(rackX + Rw / 2, rackY + Rh / 2, S * 0.012, off);
-    ctx.fillRect(rackX + off.x + 1, rackY + off.y + 1.5, Rw, Rh); ctx.restore();
+    ctx.fillRect(rackX + off.x + 1, rackY + off.y + 1.5, Bw, Rh); ctx.restore();
     ctx.save(); ctx.globalAlpha = sa * 0.6; ctx.fillStyle = '#000'; ctx.fillRect(x - Pw / 2 + 2, y + Pd / 2 + Pf - 2, Pw - 4, 4); ctx.restore();
     uprightShadow(ctx, spr.body.sh, lamp, x, y + Pd / 2 + Pf, Pd / 2 + Pf, Pf * 1.4, sa * 0.6);
     lamp.offset(carX, carY, hornH, off);
@@ -689,7 +699,7 @@ export function createPhonograph(env) {
 
     // the rack and its cylinders
     ctx.save(); ctx.translate(rackX, rackY); blitLit(ctx, spr.rack, null, alpha, 1); ctx.restore();
-    if (fr < 0.985) { ctx.save(); ctx.globalAlpha = alpha * (1 - fr) * 0.92; ctx.fillStyle = '#0a0807'; ctx.fillRect(rackX, rackY, Rw, Rh); ctx.restore(); }
+    if (fr < 0.985) { ctx.save(); ctx.globalAlpha = alpha * (1 - fr) * 0.92; ctx.fillStyle = '#0a0807'; ctx.fillRect(rackX, rackY, Bw, Rh); ctx.restore(); }
     const cs = cyls();
     for (let i = 0; i < slots.length && i < cs.length; i++) {
       const c = cs[i];
@@ -698,8 +708,8 @@ export function createPhonograph(env) {
       ctx.save(); ctx.translate(rackX, tmp.y);
       const lift = pressed === 'slot:' + i ? 0.6 : 0;
       if (lift) ctx.translate(0, -0.6);
-      blitLit(ctx, slots[i], null, alpha, fr * (1 + lift * 0.15));
-      if (fr < 0.985) { ctx.globalAlpha = alpha * (1 - fr) * 0.92; ctx.fillStyle = '#0a0807'; ctx.fillRect(0, -slotH / 2, Rw, slotH); ctx.globalAlpha = 1; }
+      // over the felt the tag simply dims (no dark card behind it)
+      blit(ctx, slots[i], alpha * clamp01(fr * (1.05 + lift * 0.15)));
       ctx.restore();
     }
 
@@ -723,9 +733,12 @@ export function createPhonograph(env) {
     const rpx = carX, rpy = carY - Dc * 0.05 - nz * Pw * 0.05 + jit;
     ctx.save();
     ctx.globalAlpha = alpha * Math.max(0.15, f);
-    ctx.strokeStyle = '#141312'; ctx.lineWidth = Math.max(1.6, Pw * 0.026); ctx.lineCap = 'round';
+    ctx.strokeStyle = '#0c0b0a'; ctx.lineWidth = Math.max(2, Pw * 0.03); ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(carX, y + rodY); ctx.lineTo(rpx, rpy - Rr * 0.6); ctx.stroke();
-    ctx.fillStyle = '#26231f'; ctx.fillRect(carX - Pw * 0.04, y + rodY - 2.4, Pw * 0.08, 4.8);
+    ctx.strokeStyle = '#5c5852'; ctx.lineWidth = Math.max(0.7, Pw * 0.009);
+    ctx.beginPath(); ctx.moveTo(carX - 0.6, y + rodY); ctx.lineTo(rpx - 0.6, rpy - Rr * 0.6); ctx.stroke();
+    ctx.fillStyle = '#2e2b27'; ctx.fillRect(carX - Pw * 0.045, y + rodY - 2.6, Pw * 0.09, 5.2);
+    ctx.fillStyle = 'rgba(255,240,210,0.25)'; ctx.fillRect(carX - Pw * 0.045, y + rodY - 2.6, Pw * 0.09, 0.8);
     ctx.restore();
     lamp.offset(rpx, rpy, Pw * (0.03 + 0.07 * nz), off);
     ctx.save(); ctx.translate(rpx + off.x, rpy + off.y); blit(ctx, spr.reproSh, sa * 0.6); ctx.restore();

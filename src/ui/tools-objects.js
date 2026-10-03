@@ -1063,19 +1063,27 @@ export function createCabinet(env) {
       ft = Math.round(clamp(TH * 0.07, 5, 10));
       const innerH = TH - ft;
       // dampers: a 2 × 2 block if it fits, else a row of four
-      dRows = innerH >= rD * 4 + 3 * 6 ? 2 : 1;
-      dGap = dRows === 2 ? clamp((innerH - rD * 4) / 3, 6, Math.max(8, rD * 0.75)) : Math.max(6, Math.min(rD * 0.6, (innerH - rD * 2) / 2));
+      dRows = innerH >= rD * 4 + 3 * 4 ? 2 : 1;
+      dGap = dRows === 2 ? clamp((innerH - rD * 4) / 3, 4, Math.max(8, rD * 0.75)) : Math.max(6, Math.min(rD * 0.6, (innerH - rD * 2) / 2));
       const dZoneW = (4 / dRows) * rD * 2 + (4 / dRows + 1) * dGap;
-      // forks: lying in as few columns as their width allows
-      const tw0 = clamp(S * 0.0135, 3.2, 8);
-      fRows = clamp(Math.floor((innerH - 4) / (tw0 * 3.25 + 5)), 1, 7);
-      let cols = Math.ceil(FORK_KS.length / fRows);
-      if (cols > 3 && fRows < 7) { fRows = Math.min(7, Math.ceil(FORK_KS.length / 3)); cols = Math.ceil(FORK_KS.length / fRows); }
+      // forks: lying in rows; the fewest rows (the stoutest forks) whose columns keep the drawer
+      // no wider than the plate, else whatever fits the window
+      const Lf = clamp(S * 0.29, 90, 260);      // the longest fork (k = 5)
+      fColW = Lf + 16;
+      const maxTW = Math.max(TW, S * 1.02);
+      let pickRows = 0, fallback = 7;
+      for (let rows = 1; rows <= 7; rows++) {
+        const tw = ((innerH - 4) / rows - 5) / 3.25;
+        if (tw < 3) { fallback = Math.max(1, rows - 1); break; }
+        const cols = Math.ceil(FORK_KS.length / rows);
+        if (ft * 2 + dZoneW + 12 + cols * fColW <= maxTW) { pickRows = rows; break; }
+        fallback = rows;
+      }
+      fRows = pickRows || fallback;
+      const cols = Math.ceil(FORK_KS.length / fRows);
       fPitch = (innerH - 4) / fRows;
       FG.tineW = clamp((fPitch - 5) / 3.25, 2.6, 8);
       forkWidths();
-      const Lf = clamp(S * 0.3, 90, 260);      // the longest fork (k = 5)
-      fColW = Lf + 16;
       const need = ft * 2 + dZoneW + 12 + cols * fColW;
       TW = Math.round(Math.min(v.vw - 16, Math.max(TW, need)));
       if (need > TW) fColW = Math.max(60, (TW - ft * 2 - dZoneW - 12) / cols);
