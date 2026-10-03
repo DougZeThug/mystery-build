@@ -23,7 +23,7 @@ export const KEEPER_PAGES = [
       'I clamped it at the centre as Herr Ritter’s letter instructs, sifted a little sand upon it, ' +
       'and drew the bow along the edge. The sand drew a cross; then, when I bore down, a ring. ' +
       'It was like watching a thought decide.',
-    sketch: [{ kind: 'mode', mode: '1.3+', label: 'the cross' }, { kind: 'mode', mode: '2.2+', label: 'the ring' }],
+    sketch: [{ kind: 'mode', mode: '1.3+', label: 'the cross' }, { kind: 'mode', mode: '2.4+', label: 'the ring' }],
     post: 'Ritter writes that the sand must be sea-sand, washed and dried. I have used the kitchen\u2019s, and it seems not to mind.',
   },
   {
@@ -31,12 +31,12 @@ export const KEEPER_PAGES = [
     text: 'I had supposed the sand would run to where the plate is most alive. It is quite the reverse. ' +
       'It flees the moving places and goes where the plate is __still__, and there it rests, content. ' +
       'I find this a comfort, and cannot say why.',
-    sketch: [{ kind: 'mode', mode: '2.4+', label: 'here, and here: nothing moves' }],
+    sketch: [{ kind: 'mode', mode: '2.2+', label: 'here, and here: nothing moves' }],
     post: 'N.B. \u2014 the still places are not empty. They are only quiet.',
   },
   {
     id: 'believed', date: '2nd March',
-    text: 'Tonight I held a single note for a very long while — until the sand believed it. ' +
+    text: 'Tonight I held a single note for a very long while\u00a0— until the sand believed it. ' +
       'Where two of the lines crossed, the heap grew taller than its neighbours, and shivered, and ' +
       'something stood up. It was the size of a ~~button~~ shirt-stud, and it glowed.\n\n' +
       'I did not drop the bow. I am rather proud of that.',
@@ -58,7 +58,7 @@ export const KEEPER_PAGES = [
   {
     id: 'union', date: '17th March',
     text: 'Two that agreed walked into one another and came out as one, singing both notes at once.\n\n' +
-      'Two that did not agree — ~~the smaller~~ I will not describe it. The larger was very pleased.',
+      'Two that did not agree\u00a0— ~~the smaller~~ I will not describe it. The larger was very pleased.',
     post: 'Later. It has not once stopped singing both notes. I find that I envy it.',
   },
   {
@@ -79,7 +79,7 @@ export const KEEPER_PAGES = [
   {
     id: 'seam', date: '23rd April', unlock: ['firstGold', 'firstCrack'],
     text: 'The gold found the crack before I did. It went in like water finding a step, and stayed. ' +
-      'Where it has sealed, the plate rings __truer__ than it did when it was whole — and this morning ' +
+      'Where it has sealed, the plate rings __truer__ than it did when it was whole\u00a0— and this morning ' +
       'something new was born along the seam, veined all through with gold.',
     post: 'So nothing here is wasted. Not even the dying.',
   },

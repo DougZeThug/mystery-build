@@ -169,7 +169,7 @@ export function createJournal(game, rootEl) {
   let pending = null;
   const SAND_TAILS = [
     'Rose out of the sand at a crossing of lines.',
-    'Walked at once toward the centre.',
+    'Hummed its note once, as if to be sure of it.',
     'Stood up out of a heap of sand and looked about.',
     'Gathered itself out of the sand in a few seconds, and sang.',
     'Came up out of the sand quite small, and then less small.',
@@ -294,7 +294,7 @@ export function createJournal(game, rootEl) {
     const c = cracks[e.crack]?.pts?.[0];
     let edge = '';
     if (c) edge = Math.abs(c[0]) > Math.abs(c[1]) ? (c[0] > 0 ? 'right' : 'left') : (c[1] > 0 ? 'near' : 'far');
-    if (first('crack', 'crack', `Bowed too hard. A crack, fine as a hair, running in from the ${edge || 'outer'} edge. Every note sounds a little sour now.`)) return;
+    if (first('crack', 'crack', `Asked too much of the plate. A crack, fine as a hair, running in from the ${edge || 'outer'} edge. Every note sounds a little sour now.`)) return;
     note('crack', n === 2 ? 'A second crack.' : `A ${ordinal(n)} crack. The plate rings sour.`);
   });
   on('plate:heal', () => {
@@ -387,7 +387,7 @@ export function createJournal(game, rootEl) {
     let from = 'the cylinder';
     if (cyl?.t) {
       const k = keeping(cyl.t, s.created), k0 = keeping(now, s.created);
-      from = k.key === k0.key ? `the cylinder I made earlier this ${k.period}` : `the cylinder from ${k.label}`;
+      from = k.key === k0.key ? `the cylinder I made earlier ${k.period === 'night' ? 'tonight' : 'this ' + k.period}` : `the cylinder from ${k.label}`;
     }
     const n = nb.phonoPlay = (nb.phonoPlay || 0) + 1;
     const ghost = ghostOf(e.modes);
