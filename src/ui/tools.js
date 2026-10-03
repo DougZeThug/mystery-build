@@ -145,7 +145,7 @@ export function createTools(game) {
       tapComps[n].mode = best[i].id; tapComps[n].amp = strength * shares[i] * (0.45 + 0.55 * mag); n++;
     }
     for (let i = n; i < 3; i++) { tapComps[i].mode = null; tapComps[i].amp = 0; }
-    game.field?.impulse?.(tapComps, 0.75);
+    game.field?.impulse?.(tapComps, 1.4);
     game.sand?.scatter?.(u, v, strength * 0.85);
     emit('plate:tap', { u, v, strength });
     const r = rings[ringHead]; ringHead = (ringHead + 1) % RING_N;
@@ -353,7 +353,8 @@ export function createTools(game) {
         if (!p.hold) {
           if (Math.hypot(x - p.sx, y - p.sy) > HOLD_PX) { p.sx = x; p.sy = y; p.st = performance.now(); }
           // a drag begun on the edge band, or one that reaches an edge from the interior, picks the bow up
-          if (p.moved && bow.heldBy < 0 && (p.edge || edgeNear(x, y, SNAP_PX * 0.8))) { bow.pickUp(p.id, x, y, true); p.kind = 'bow'; }
+          // (a drag begun anywhere on the plate takes up the bow and plays the nearest edge)
+          if (p.moved && bow.heldBy < 0) { bow.pickUp(p.id, x, y, true); p.kind = 'bow'; }
         }
         break;
       case 'bow': bow.samples(e, x, y); break;         // the bow reads the pointer in update, plus its path

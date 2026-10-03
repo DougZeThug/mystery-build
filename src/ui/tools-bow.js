@@ -276,13 +276,15 @@ export function createBow(env) {
   let hHead = 0, hN = 0;
   function hPush(t, x, y) { hT[hHead] = t; hX[hHead] = x; hY[hHead] = y; hHead = (hHead + 1) % HN; if (hN < HN) hN++; }
   // (stillness before the hand set off does not count: a stroke is timed from its first movement)
+  // (tx = ty = 0: count movement in any direction, for a hand stroking across the plate itself)
   function hSpeed(win, tx, ty, now) {
+    const any = tx === 0 && ty === 0;
     if (hN < 2) return 0;
     let i = (hHead - 1 + HN) % HN, px = hX[i], py = hY[i], dist = 0, t0 = -1, t1 = -1;
     for (let k = 1; k < hN; k++) {
       const j = (i - 1 + HN) % HN;
       if (now - hT[j] > win * 1000) break;
-      const d = Math.abs((px - hX[j]) * tx + (py - hY[j]) * ty);
+      const d = any ? Math.hypot(px - hX[j], py - hY[j]) : Math.abs((px - hX[j]) * tx + (py - hY[j]) * ty);
       if (d > 0.25) { dist += d; t0 = hT[j]; if (t1 < 0) t1 = hT[i]; }
       px = hX[j]; py = hY[j]; i = j;
     }
@@ -348,7 +350,7 @@ export function createBow(env) {
       else if (i === 2) { d = Math.abs(py - (Y0 + S)); t = (X0 + S - px) / S; }
       else { d = Math.abs(px - X0); t = (Y0 + S - py) / S; }
       if (t < -0.05 || t > 1.05) continue;
-      const dd = name === curEdge ? d - 6 : d;
+      const dd = name === curEdge ? d - S * 0.1 : d;   // keep to the edge in use (no flicker near corners)
       if (dd < bd) { bd = dd; best = name; }
     }
     out.name = best;
@@ -446,8 +448,8 @@ export function createBow(env) {
       vpx += (ivx - vpx) * kv; vpy += (ivy - vpy) * kv;
       edgeAt(px, py, E);
       const B = band();
-      if (E.name) wEdge = 1 - smooth(B, B * 2.4, E.d);
-      if (grab.fast && E.name) wEdge = Math.max(wEdge, 1 - smooth(B * 1.2, B * 2.6, E.d));
+      // the bow plays the nearest edge whenever the hand is over the plate, or close outside it
+      if (E.name) wEdge = E.inside >= 0 ? 1 : 1 - smooth(B * 1.4, B * 3.2, E.d);
       if (wEdge > 0.999) curEdge = E.name; else if (wEdge < 0.5) curEdge = null;
 
       // free carry: the grip point under the hand; the bow trails a little when swung sideways
@@ -513,25 +515,23 @@ export function createBow(env) {
     // stayed on the edge band for a moment sounds while the bow is still settling into place
     let onEdge = false;
     const nowC = performance.now();
-    if (grab.id >= 0 && E.name && wEdge > (contact ? 0.95 : 0.999)) {
-      const dn = Math.abs((pose.x - tgt.x) * E.nx + (pose.y - tgt.y) * E.ny);
-      const da = Math.abs(angDiff(pose.a, tgt.a)), df = Math.abs(pose.f - tgt.f);
-      const settled = contact ? dn < 24 && da < 0.35 && df < 0.6 : dn < 10 && da < 0.2 && df < 0.35;
-      const fresh = grab.fast && nowC - grabT < 450 && Math.hypot(lastPx - grabX, lastPy - grabY) > 1.5;   // (a tap is not a stroke)
-      onEdge = settled || fresh || bandT > 0.07;
-    }
+    if (grab.id >= 0 && E.name && wEdge > (contact ? 0.5 : 0.9)) onEdge = true;
     if (onEdge && !contact) startContact();
     else if (!onEdge && contact) endContact();
 
     if (contact) {
       const vt = vpx * E.tx + vpy * E.ty;
       // vigour: distance along the edge per second over the last moment (a scrub's reversals do
-      // not read as stops); `moving` also looks at a shorter window so a pause is felt quickly
-      const vw = hSpeed(0.16, E.tx, E.ty, nowC), vq = hSpeed(0.09, E.tx, E.ty, nowC);
-      if (sp === 0) sp = Math.max(vw, Math.abs(vt) * 0.8);   // a stroke starts at the speed it starts at
+      // not read as stops); `moving` also looks at a shorter window so a pause is felt quickly.
+      // A hand stroking over the plate itself plays in any direction it moves.
+      const across = E.inside > band() * 0.5;
+      const ax = across ? 0 : E.tx, ay = across ? 0 : E.ty;
+      const vw = hSpeed(0.16, ax, ay, nowC), vq = hSpeed(0.09, ax, ay, nowC);
+      const vAbs = across ? Math.hypot(vpx, vpy) : Math.abs(vt);
+      if (sp === 0) sp = Math.max(vw, vAbs * 0.8);   // a stroke starts at the speed it starts at
       const kS = 1 - Math.exp(-dt / 0.12), kF = 1 - Math.exp(-dt / 0.045);
       sp += (vw - sp) * kS;
-      spFast += (Math.abs(vt) - spFast) * kF;
+      spFast += (vAbs - spFast) * kF;
       const moving = Math.max(spFast, vq) > 28;
       out.speed01 = clamp01(sp / fullSpeed);
       out.edge = E.name; out.t = clamp(E.t, 0, 1);
@@ -556,9 +556,12 @@ export function createBow(env) {
         } else m = pick(out.edge, tPick, spPick, dt);
         if (m) out.mode = m;
       }
-      const target = moving ? 0.25 + 0.9 * out.speed01 : 0;
-      if (moving && amp < 0.25) amp = 0.25;          // the hair bites at once
-      amp += (target - amp) * (1 - Math.exp(-dt / (moving ? 0.07 : 0.35)));
+      // the hair bites at once, and the bronze keeps singing a while after the hand pauses
+      if (moving) {
+        const target = 0.42 + 0.78 * out.speed01;
+        if (amp < 0.42) amp = 0.42;
+        amp += (target - amp) * (1 - Math.exp(-dt / 0.07));
+      } else amp *= Math.exp(-dt / 2.4);
       if (out.mode && amp > 0.008) { comps[0].mode = out.mode; comps[0].amp = amp; game.field?.setSource?.('bow', comps); }
       else game.field?.setSource?.('bow', EMPTY);
       out.x = E.ex; out.y = E.ey;
