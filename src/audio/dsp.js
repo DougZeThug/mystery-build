@@ -471,3 +471,56 @@ export function droneRootHz(ks, lo = 55, hi = 110) {
   const root = g >= 4 ? g : Math.min(...list);
   return foldInto(kHz(root), lo, hi);
 }
+
+// Modes that share a harmonic number ring at one frequency (every n.m± pair; 1.7± and 5.5+ at
+// k = 50). Two oscillators at one pitch add or cancel by the accident of when each was started, so
+// the plate's voices and the phonograph's horn are keyed by pitch, not by mode:
+// group[i] = pitch index of MODES[i] (-1 when skipped), hz[g] = that pitch's frequency.
+export function pitchGroups(modes, skip = (m) => m.special) {
+  const group = new Int16Array(modes.length).fill(-1);
+  const at = new Map(), hz = [];
+  for (let i = 0; i < modes.length; i++) {
+    const m = modes[i];
+    if (skip(m)) continue;
+    let g = at.get(m.k);
+    if (g === undefined) { g = hz.length; at.set(m.k, g); hz.push(kHz(m.k)); }
+    group[i] = g;
+  }
+  return { group, hz: Float64Array.from(hz), count: hz.length };
+}
+
+// Per-pitch amplitude: the modes of a pitch add by power, out[g] = sqrt(Σ a_i²). Fills `out`.
+export function powerByPitch(amps, group, out) {
+  out.fill(0);
+  for (let i = 0; i < amps.length; i++) {
+    const g = group[i], a = amps[i];
+    if (g >= 0 && a > 0) out[g] += a * a;
+  }
+  for (let g = 0; g < out.length; g++) out[g] = Math.sqrt(out[g]);
+  return out;
+}
+
+// Pick an offset d in [lo, hi] (a grid of `step`), as close to `pref` as possible, such that every
+// point + d keeps at least `min` from every value in `taken`; if none clears `min`, the one that
+// keeps the widest gap. Singers use it for their fixed detune (points = their pitches in cents,
+// taken = pitches already sounding) so that two kinds on one pitch beat slowly rather than add or
+// cancel by phase, and to keep coinciding kinds off each other's vibrato rate.
+export function spreadOffset(points, taken, pref, { lo, hi, step, min }) {
+  pref = Math.max(lo, Math.min(hi, pref));
+  const n = Math.ceil((hi - lo) / step);
+  let best = pref, bestGap = -1;
+  for (let j = 0; j <= 2 * n; j++) {
+    const d = pref + (j & 1 ? 1 : -1) * ((j + 1) >> 1) * step;   // pref, +step, -step, +2·step ...
+    if (d < lo - 1e-9 || d > hi + 1e-9) continue;
+    let gap = Infinity;
+    for (let a = 0; a < points.length; a++) {
+      for (let b = 0; b < taken.length; b++) {
+        const x = Math.abs(points[a] + d - taken[b]);
+        if (x < gap) gap = x;
+      }
+    }
+    if (gap >= min) return d;
+    if (gap > bestGap) { bestGap = gap; best = d; }
+  }
+  return best;
+}

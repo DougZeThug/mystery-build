@@ -5,12 +5,15 @@
 //              through a horn: band-limited, a little reedy, wobbling with the cylinder's wow and
 //              the motor's flutter. The plate rings in sympathy underneath (voices.js ducks the
 //              plate's own voice for those modes), so what you hear is a RECORDING of the plate.
+//              One horn tone per pitch: modes that share k (the n.m± twins) add by power into one
+//              oscillator, as on the plate, so they cannot cancel by phase.
 // Like every continuous voice it wakes on demand and sleeps (stopped, disconnected) when idle.
 import { MODES } from '../sim/modes.js';
-import { PHONO_TURN } from './dsp.js';
+import { PHONO_TURN, pitchGroups, powerByPitch } from './dsp.js';
 
-const NM = MODES.length;
-const TONE_MAX = 6;               // doubled modes, loudest first
+const PITCH = pitchGroups(MODES, () => false);   // the floor too: the cylinder may hold it
+const NP = PITCH.count;
+const TONE_MAX = 6;               // doubled pitches, loudest first
 const TONE_LEVEL = 0.17;
 const MOTOR_LEVEL = 0.03, HISS_LEVEL = 0.05, BED_LEVEL = 0.15;
 const SEND = 0.22;                // the machine is in the room: a little reverb
@@ -26,8 +29,9 @@ function glide(last, key, param, v, at, tau) {
 export function createPhono(E) {
   let n = null, idle = 0;
   const last = {};
-  const slots = new Array(NM).fill(null);
-  const order = new Int16Array(NM);
+  const slots = new Array(NP).fill(null);
+  const order = new Int16Array(NP);
+  const amp = new Float32Array(NP);
   let stamp = 0;
   // the horn: a few low harmonics (the diaphragm is not linear), then the band-limit does the rest
   const horn = (() => {
@@ -77,25 +81,24 @@ export function createPhono(E) {
     idle = 0;
   }
   function sleep(at) {
-    for (let i = 0; i < NM; i++) if (slots[i]) killSlot(i, at);
+    for (let g = 0; g < NP; g++) if (slots[g]) killSlot(g, at);
     const nodes = Object.values(n).filter((x) => x && typeof x === 'object');
     for (const s of [n.turn, n.drift, n.flut, n.mSrc, n.hSrc, n.bSrc]) E.stop(s, at);
     n.turn.onended = () => E.free(nodes);
     n = null;
   }
-  function slot(i, at) {
-    let s = slots[i];
+  function slot(p, at) {
+    let s = slots[p];
     if (s) return s;
-    const f = MODES[i].freq;
-    const o = E.osc(horn, f, -4), g = E.gain(0);     // the spring runs a hair slow
+    const o = E.osc(horn, PITCH.hz[p], -4), g = E.gain(0);     // the spring runs a hair slow
     o.connect(g); g.connect(n.tSum); n.wf.connect(o.detune);
     o.start(at);
-    s = slots[i] = { o, g, idle: 0, stamp: 0, last: {} };
+    s = slots[p] = { o, g, idle: 0, stamp: 0, last: {} };
     return s;
   }
-  function killSlot(i, at) {
-    const s = slots[i];
-    slots[i] = null;
+  function killSlot(p, at) {
+    const s = slots[p];
+    slots[p] = null;
     try { n.wf.disconnect(s.o.detune); } catch { /* gone */ }
     E.stop(s.o, at);
     const nodes = [s.o, s.g];
@@ -121,11 +124,11 @@ export function createPhono(E) {
       glide(last, 'h', n.hG.gain, rec ? HISS_LEVEL : 0, at, rec ? 0.08 : 0.06);
       glide(last, 'b', n.bG.gain, play ? BED_LEVEL : 0, at, play ? 0.1 : 0.07);
 
-      // the horn doubles what the cylinder is playing into the plate, loudest modes first
-      const A = P && P.amps;
+      // the horn doubles what the cylinder is playing into the plate, loudest pitches first
+      const A = play && P.amps ? powerByPitch(P.amps, PITCH.group, amp) : null;
       let cnt = 0;
-      if (play && A) {
-        for (let i = 0; i < NM; i++) if (A[i] > 0.004) order[cnt++] = i;
+      if (A) {
+        for (let p = 0; p < NP; p++) if (A[p] > 0.004) order[cnt++] = p;
         for (let a = 1; a < cnt; a++) {
           const x = order[a], ax = A[x];
           let b = a - 1;
@@ -139,17 +142,17 @@ export function createPhono(E) {
       for (let j = 0; j < cnt; j++) sum += A[order[j]];
       const norm = sum > 0.7 ? Math.sqrt(0.7 / sum) : 1;
       for (let j = 0; j < cnt; j++) {
-        const i = order[j];
-        const s = slot(i, at);
+        const p = order[j];
+        const s = slot(p, at);
         s.stamp = stamp; s.idle = 0;
-        const lv = TONE_LEVEL * Math.pow(A[i], 0.8) * norm;
+        const lv = TONE_LEVEL * Math.pow(A[p], 0.8) * norm;
         glide(s.last, 'g', s.g.gain, lv, at, lv > (s.last.g || 0) ? 0.05 : 0.12);
       }
-      for (let i = 0; i < NM; i++) {
-        const s = slots[i];
+      for (let p = 0; p < NP; p++) {
+        const s = slots[p];
         if (!s || s.stamp === stamp) continue;
         glide(s.last, 'g', s.g.gain, 0, at, 0.1);
-        if ((s.idle += dt) > 0.9) killSlot(i, at + 0.02);
+        if ((s.idle += dt) > 0.9) killSlot(p, at + 0.02);
       }
       glide(last, 't', n.tG.gain, play ? 1 : 0, at, play ? 0.06 : 0.08);
     },

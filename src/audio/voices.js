@@ -4,10 +4,11 @@
 // and only when they actually change (glide), so nothing clicks and the automation queue stays
 // short. Nothing here allocates per frame once a voice is awake.
 import { MODES } from '../sim/modes.js';
-import { voiceChord, hash01 } from './dsp.js';
+import { voiceChord, hash01, pitchGroups, powerByPitch, spreadOffset } from './dsp.js';
 
-const NM = MODES.length;
 const TAU = Math.PI * 2;
+const PITCH = pitchGroups(MODES);            // modes -> distinct pitches (the n.m± twins share one)
+const NP = PITCH.count;
 const clamp01 = (x) => (x > 0 ? (x < 1 ? x : 1) : 0);
 
 // set an AudioParam toward v unless it is already heading there
@@ -19,10 +20,12 @@ function glide(last, key, param, v, at, tau) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The plate: one voice per sounding mode (max 10, loudest first). A sine at the mode's frequency
-// plus an inharmonic pair (×2.72, ×5.44, baked into one PeriodicWave): bronze, not organ. (The
-// plate bus brightens as the whole plate swells; see engine.frame.) Unhealed cracks pull the tone
-// flat and add a slightly sharp ghost that beats against it.
+// The plate: one voice per sounding pitch (max 10, loudest first). Modes that share k (the n.m±
+// twins) ring at one frequency, so they share one voice at their power sum: two oscillators on one
+// pitch would add or cancel by the accident of when each woke. A sine at the pitch plus an
+// inharmonic pair (×2.72, ×5.44, baked into one PeriodicWave): bronze, not organ. (The plate bus
+// brightens as the whole plate swells; see engine.frame.) Unhealed cracks pull the tone flat and
+// add a slightly sharp ghost that beats against it.
 
 const PLATE_MAX = 10;
 const PLATE_LEVEL = 0.22;
@@ -31,15 +34,16 @@ const PARTIAL = 2.72;
 
 export function createPlate(E) {
   const out = E.bus.plate;
-  const V = new Array(NM).fill(null);
-  const order = new Int16Array(NM);
+  const V = new Array(NP).fill(null);
+  const order = new Int16Array(NP);
+  const amp = new Float32Array(NP), phAmp = new Float32Array(NP);
   let stamp = 0;
   let wob = null, wobG = null, wobIdle = 0;
   const wl = {};
 
-  function voice(i) {
-    let v = V[i];
-    if (!v) v = V[i] = { i, f: MODES[i].freq, live: false, stamp: 0, idle: 0, o1: null, o2: null, out: null, oh: null, gh: null, last: {} };
+  function voice(g) {
+    let v = V[g];
+    if (!v) v = V[g] = { g, f: PITCH.hz[g], live: false, stamp: 0, idle: 0, o1: null, o2: null, out: null, oh: null, gh: null, last: {} };
     return v;
   }
   function wake(v, at) {
@@ -87,30 +91,30 @@ export function createPlate(E) {
   return {
     get live() { let n = 0; for (const v of V) if (v && v.live) n++; return n; },
     update(snap, dt, at) {
-      const amps = snap.amps;
+      powerByPitch(snap.amps, PITCH.group, amp);    // the floor (special) has its own voice
       let n = 0;
-      for (let i = 0; i < NM; i++) if (amps[i] > 0.008 && !MODES[i].special) order[n++] = i;
+      for (let g = 0; g < NP; g++) if (amp[g] > 0.008) order[n++] = g;
       for (let a = 1; a < n; a++) {
-        const x = order[a], ax = amps[x];
+        const x = order[a], ax = amp[x];
         let b = a - 1;
-        while (b >= 0 && amps[order[b]] < ax) { order[b + 1] = order[b]; b--; }
+        while (b >= 0 && amp[order[b]] < ax) { order[b + 1] = order[b]; b--; }
         order[b + 1] = x;
       }
       const count = n < PLATE_MAX ? n : PLATE_MAX;
       stamp++;
       const det = snap.detune > 0 ? Math.min(0.03, snap.detune) : 0;
       let sum = 0;
-      for (let j = 0; j < count; j++) sum += Math.min(1.6, amps[order[j]]);
+      for (let j = 0; j < count; j++) sum += Math.min(1.6, amp[order[j]]);
       const norm = sum > 1.1 ? Math.sqrt(1.1 / sum) : 1;   // many modes do not add up linearly
       // what the phonograph is playing back is heard through its horn (phono.js); the bronze only
-      // rings along in sympathy, so its own voice steps back for those modes
-      const ph = snap.phono && snap.phono.play ? snap.phono.amps : null;
+      // rings along in sympathy, so its own voice steps back for those pitches
+      const ph = snap.phono && snap.phono.play ? powerByPitch(snap.phono.amps, PITCH.group, phAmp) : null;
       for (let j = 0; j < count; j++) {
-        const i = order[j], a = Math.min(1.6, amps[i]);
-        const v = voice(i);
+        const g = order[j], a = Math.min(1.6, amp[g]);
+        const v = voice(g);
         if (!v.live) wake(v, at);
         v.stamp = stamp; v.idle = 0;
-        const share = ph && ph[i] > 0 ? Math.min(1, ph[i] / Math.max(1e-3, amps[i])) : 0;
+        const share = ph && ph[g] > 0 ? Math.min(1, ph[g] / Math.max(1e-3, amp[g])) : 0;
         const lv = PLATE_LEVEL * Math.pow(a, 0.8) * norm * (1 - PHONO_DUCK * share);
         glide(v.last, 'g', v.out.gain, lv, at, lv > (v.last.g || 0) ? 0.025 : 0.09);
         glide(v.last, 'f', v.o1.frequency, v.f * (1 - det * 0.35), at, 0.25);
@@ -120,8 +124,8 @@ export function createPlate(E) {
           glide(v.last, 'hg', v.gh.gain, Math.min(0.8, det / 0.0075), at, 0.3);
         } else if (v.oh) glide(v.last, 'hg', v.gh.gain, 0, at, 0.4);
       }
-      for (let i = 0; i < NM; i++) {
-        const v = V[i];
+      for (let g = 0; g < NP; g++) {
+        const v = V[g];
         if (!v || !v.live || v.stamp === stamp) continue;
         glide(v.last, 'g', v.out.gain, 0, at, 0.1);
         v.idle += dt;
