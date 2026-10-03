@@ -235,7 +235,7 @@ function draw() {
     const col = (a) => `rgba(${(c[0] * (1 - gold) + gold) * 255 | 0},${(c[1] * (1 - gold) + 0.8 * gold) * 255 | 0},${(c[2] * (1 - gold) + 0.4 * gold) * 255 | 0},${a})`;
     const R = r * scale;
     let jx = 0, jy = 0;
-    if (fl & 256) { const k = (1 - prog / 0.6) * 0.25 + 0.08; jx = Math.sin(game.t * 61 + n) * R * k; jy = Math.cos(game.t * 53 + n * 3) * R * k; }
+    if (fl & 256) { const k = 0.08 + 0.25 * prog;   /* cling: prog = share of its grip spent */ jx = Math.sin(game.t * 61 + n) * R * k; jy = Math.cos(game.t * 53 + n * 3) * R * k; }
     if (fl & 64) {                                     // the keeper: a slow pale ring about her
       ctx.strokeStyle = `rgba(255,236,190,${0.25 * alpha})`; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(x, y, R * (1.5 + 0.12 * Math.sin(game.t * 0.8)), 0, 7); ctx.stroke();

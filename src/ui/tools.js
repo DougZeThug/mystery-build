@@ -274,7 +274,8 @@ export function createTools(game) {
           if (p.moved && bow.heldBy < 0 && edgeNear(x, y, SNAP_PX * 0.8)) { bow.pickUp(p.id, x, y, true); p.kind = 'bow'; }
         }
         break;
-      case 'jar': case 'cord': case 'bow': break;     // they read the pointer in update
+      case 'bow': bow.samples(e, x, y); break;         // the bow reads the pointer in update, plus its path
+      case 'jar': case 'cord': break;                  // they read the pointer in update
       case 'book': if (p.moved) { book.press(false); p.kind = 'none'; } break;
       case 'phono': if (p.moved) { phono.release(); p.kind = 'none'; } break;
       case 'front': break;
