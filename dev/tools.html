@@ -22,6 +22,7 @@
   <div>
     <button data-a="reveal">reveal all</button><button data-a="drawer">drawer</button><button data-a="moth">moth</button>
     <button data-a="light">light</button><button data-a="singers">+singers</button><button data-a="hide">hide</button>
+    <button data-a="unread">unread</button><button data-a="rec">rec/stop</button><button data-a="play">play 1st</button>
   </div>
   <div id="stat"></div>
 </div>
@@ -29,6 +30,7 @@
 // Tools harness: the real field, sand, life and tools on a cheap 2D plate (no WebGL, no audio unless
 // ?audio), so interactions can be exercised quickly.
 //   ?reveal (all objects)  ?moth (summon it)  ?dark  ?clean (no panel)  ?nobg / ?norender (profiling)
+// Panel: unread (the notebook's loose slip), rec/stop and play 1st (the phonograph).
 // Headless note: under swiftshader GPU flags this 2D-only page can stall rAF; run Chromium with
 // --disable-gpu for it (the WebGL app itself needs the swiftshader flags).
 import { bus } from '../src/core/bus.js';
@@ -49,7 +51,7 @@ const sand = createSand(field, { state, bus });
 sand.seedScatter(15000);
 const game = { t: 0, dt: 0, rng: makeRng(9), bus, debug: true, view: null, state, field, sand, life: null,
   light: { on: !q.has('dark'), level: q.has('dark') ? 0 : 1, flicker: 0 }, fx: { choir: 0, floor: 0, shake: 0, flash: 0 },
-  hold: null, wear: new Uint8Array(128 * 128), WEAR: 128, wearVersion: 0, audio: null, journal: { open() { console.log('journal.open'); }, isOpen: false } };
+  hold: null, wear: new Uint8Array(128 * 128), WEAR: 128, wearVersion: 0, audio: null, journal: { open() { console.log('journal.open'); this.unread = 0; }, isOpen: false, unread: 0 } };
 game.life = createLife(game);
 function resize() {
   const dpr = Math.min(2, devicePixelRatio || 1), vw = innerWidth, vh = innerHeight;
@@ -80,6 +82,9 @@ document.getElementById('panel').addEventListener('click', (e) => {
   if (a === 'light') game.tools._dev.cord.toggle();
   if (a === 'singers') for (let i = 0; i < 6; i++) game.life.spawn?.([['2.3+', '1.4-', '3.4+'][i % 3]], (Math.random() - 0.5) * 1.2, (Math.random() - 0.5) * 1.2, 0.8);
   if (a === 'hide') document.getElementById('panel').classList.add('hide');
+  if (a === 'unread') game.journal.unread = game.journal.unread ? 0 : 1;
+  if (a === 'rec') { const p = game.tools.phonograph; if (p.mode === 'idle') p.record(); else p.stop(); }
+  if (a === 'play') game.tools.phonograph.play(0);
 });
 
 // a cheap plate: felt, a lamp pool, bronze, the sand density texture, singer dots
@@ -123,7 +128,8 @@ function frame(now) {
   const b = game.tools.bow, c = field.coherence;
   stat.textContent = `bow ${b.held ? 'held' : '-'} ${b.bowing ? 'BOWING ' + b.edge + ' t' + b.t.toFixed(2) : ''}\n` +
     `speed ${b.speed01.toFixed(2)} mode ${b.mode || '-'}\nfield ${field.total.toFixed(2)} dom ${c.dominant || '-'} ${c.share.toFixed(2)} stable ${c.stable.toFixed(1)}\n` +
-    `sand ${sand.n} dampers ${field.dampers.length} hold ${game.hold ? 'yes' : '-'}`;
+    `sand ${sand.n} dampers ${field.dampers.length} hold ${game.hold ? 'yes' : '-'}\n` +
+    `phono ${game.tools.phonograph.mode} cylinders ${state.cylinders.length}`;
 }
 requestAnimationFrame(frame);
 </script>
