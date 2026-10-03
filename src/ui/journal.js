@@ -269,7 +269,7 @@ export function createJournal(game, rootEl) {
   let extWindow = 0, extInWindow = 0, extSuppressed = 0;
   on('species:extinct', (e) => {
     const sp = e.species;
-    if (!sp) return;
+    if (!sp || isKeeper(sp)) return;
     const now = Date.now();
     if (now - (lastExtinct.get(sp.id) || 0) < 60000) return;
     lastExtinct.set(sp.id, now);
@@ -352,6 +352,53 @@ export function createJournal(game, rootEl) {
   on('bow:start', () => first('bow', 'bow', 'Drew the bow along the edge. The plate sang.'));
   on('fork:touch', () => first('fork', 'fork', 'Struck a fork and touched it to the plate. It held the note by itself for a while.'));
   on('damper:place', () => first('damper', 'damper', 'Set a felt disc on the plate. The figure bent around it.'));
+  // the phonograph: the first few recordings and playings, then only now and then
+  const OFTEN = 600000;
+  const quote = (label) => (label ? `\u2018${String(label).slice(0, 40)}\u2019` : '');
+  on('phono:record', (e) => {
+    if (e.on !== false || !(e.index >= 0)) return;            // stopped without keeping anything
+    const nb = nbState(), now = Date.now(), label = quote(e.label);
+    const n = nb.phonoRec = (nb.phonoRec || 0) + 1;
+    if (e.label === 'below the floor' && first('phonoFloor', 'phono', 'Recorded the floor. I do not know whether wax can hold a note that low.')) return;
+    if (/^the choir/.test(e.label || '') && first('phonoChoir', 'phono', 'Recorded the choir.')) return;
+    const secs = Math.round((e.frames || 0) * 0.25);
+    let text = null;
+    if (n === 1) text = `Recorded the plate for ${secs >= 19 ? 'twenty seconds' : secs < 2 ? 'a second or two' : words(secs) + ' seconds'}.`;
+    else if (n === 2) text = label ? `Recorded another cylinder, and pencilled ${label} on the end.` : 'Recorded another cylinder.';
+    else if (n === 3) text = label ? `A third cylinder: ${label}.` : 'A third cylinder.';
+    else if (n % 4 === 0 && now - (nb.phonoT || 0) > OFTEN) text = label ? `Recorded ${label}.` : 'Recorded the plate again.';
+    if (text) { nb.phonoT = now; note('phono', text, { index: e.index }); }
+  });
+  // which kind, now gone, would the sand draw for a cylinder whose loudest notes are these?
+  function ghostOf(modes) {
+    if (!Array.isArray(modes) || !modes.length) return null;
+    let best = null;
+    for (const r of speciesList()) {
+      if (!r.extinct || isKeeper(r) || !r.comps?.length || !r.comps.includes(modes[0])) continue;
+      if (!r.comps.every((c) => modes.includes(c))) continue;
+      if (!best || r.comps.length > best.comps.length) best = r;
+    }
+    return best;
+  }
+  on('phono:play', (e) => {
+    if (!e.on) return;
+    const s = st(), nb = nbState(), now = Date.now(), label = quote(e.label);
+    const cyl = Array.isArray(s.cylinders) ? s.cylinders[e.index] : null;
+    let from = 'the cylinder';
+    if (cyl?.t) {
+      const k = keeping(cyl.t, s.created), k0 = keeping(now, s.created);
+      from = k.key === k0.key ? `the cylinder I made earlier this ${k.period}` : `the cylinder from ${k.label}`;
+    }
+    const n = nb.phonoPlay = (nb.phonoPlay || 0) + 1;
+    const ghost = ghostOf(e.modes);
+    if (ghost && first('ghost_' + ghost.id, 'phono', `Played back ${from}. For a while the sand drew *${ghost.name}* again.`, { id: ghost.id })) { nb.phonoT = now; return; }
+    let text = null;
+    if (n === 1) text = `Played back ${from}. The sand remembered.`;
+    else if (n === 2) text = label ? `Played back ${label}. The sand went back into the figure it had then.` : `Played back ${from}. The sand went back into the figure it had then.`;
+    else if (n === 3) text = `Played back ${from}.`;
+    else if (n % 4 === 0 && now - (nb.phonoT || 0) > OFTEN) text = label ? `Put on ${label} and listened.` : `Played back ${from}.`;
+    if (text) { nb.phonoT = now; note('phono', text, { index: e.index }); }
+  });
   // anyone may write in the book (the time away, the dream)
   on('log', (e) => { if (e.text) note(e.kind || 'note', e.text, e.data); });
 
@@ -383,15 +430,19 @@ export function createJournal(game, rootEl) {
     if (!nb.f.figure && coh && coh.stable > 3) first('figure', 'figure', 'Kept to one note. The sand settled into a figure, and stayed so.');
     // silence: everything alive has gone
     const life = game.life;
-    let alive = 0;
+    let alive = 0, keeperHere = false;
     if (life) {
-      if (typeof life.count === 'number') alive = life.count;
-      else if (Array.isArray(life.motes)) for (const m of life.motes) if (!m.dead) alive++;
+      if (Array.isArray(life.motes) && life.motes.length) {
+        for (const m of life.motes) { if (m.dead) continue; if (m.keeper) keeperHere = true; else alive++; }
+      } else if (typeof life.count === 'number') alive = life.count;
     }
     if (alive > 0) { hadLife = true; silentFor = 0; silenced = false; }
     else if (hadLife && !silenced) {
       silentFor += dt;
-      if (silentFor > 4) { silenced = true; note('silence', 'The plate fell silent. None remain.'); }
+      if (silentFor > 4) {
+        silenced = true;
+        note('silence', keeperHere ? 'The plate fell silent. None remain but her, walking the rim.' : 'The plate fell silent. None remain.');
+      }
     }
     if (extSuppressed && Date.now() - extWindow > 10000) {
       note('extinct', extSuppressed === 1 ? 'And one other kind went the same way.' : `And ${words(extSuppressed)} other kinds went the same way.`);
@@ -409,6 +460,7 @@ export function createJournal(game, rootEl) {
     keeperClock += dt;
     if (keeperClock < 2) return;
     keeperClock = 0;
+    returns(s, nb);
     const kp = keeperPagesFor(s);
     if (nb.keeperN == null) nb.keeperN = kp.length;
     if (kp.length > nb.keeperN) {
@@ -421,6 +473,23 @@ export function createJournal(game, rootEl) {
         nb.f.keeperFound = Date.now();
       }
     } else if (!nb.keeperIds) nb.keeperIds = kp.map((p) => p.id);
+  }
+
+  // a kind written off that walks again (the phonograph, a dream, a lucky mutation)
+  function returns(s, nb) {
+    const recs = s.species || {};
+    const gone = [];
+    for (const id in recs) if (recs[id]?.extinct && !isKeeper(recs[id])) gone.push(id);
+    if (!Array.isArray(nb.gone)) { nb.gone = gone; return; }
+    const back = nb.back || (nb.back = {});
+    const day = keeping(Date.now(), s.created).key;
+    for (const id of nb.gone) {
+      const r = recs[id];
+      if (!r || r.extinct || back[id] === day) continue;
+      back[id] = day;
+      note('return', r.stats?.returns > 1 ? `*${r.name}* back again.` : `A *${r.name}* again, which I had thought gone.`, { id });
+    }
+    nb.gone = gone;
   }
 
   // =================================================================================================
@@ -1045,7 +1114,7 @@ export function createJournal(game, rootEl) {
     const clans = [...new Set((ks.length ? ks.map(clanOf) : [r.clan]).filter((c) => c && c !== '0'))];
     if (!clans.length) return '';
     const w = clans.map((c) => words(+c));
-    return clans.length === 1 ? `clan of ${w[0]}` : `clans of ${w.slice(0, -1).join(', ')} and ${w[w.length - 1]}`;
+    return clans.length === 1 ? `clan\u00a0of\u00a0${w[0]}` : `clans\u00a0of\u00a0${w.slice(0, -1).join(', ')} and\u00a0${w[w.length - 1]}`;
   }
   function parentsLabel(r) {
     const sp = st().species || {};
@@ -1131,7 +1200,7 @@ export function createJournal(game, rootEl) {
     const t = el('div', 'nb-sp-txt');
     t.appendChild(el('div', 'nb-sp-name', esc(r.name || 'Vossia fundamentalis')));
     const ratio = ratioLabel(r) || 'k 2';
-    t.appendChild(el('div', 'nb-lab', `${esc(ratio)} <span class="nb-dot">·</span> <span class="nb-lk">clan of one</span>`));
+    t.appendChild(el('div', 'nb-lab', `${esc(ratio)} <span class="nb-dot">·</span> <span class="nb-lk">clan&nbsp;of&nbsp;one</span>`));
     const ks = keeping(r.firstSeen || Date.now(), st().created);
     t.appendChild(el('div', 'nb-lab', `<span class="nb-lk">first seen</span> ${esc(ks.label)}, ${clock(r.firstSeen || Date.now())}`));
     t.appendChild(el('div', 'nb-vh nb-vh-count', 'Do not trouble to count me.'));
@@ -1149,15 +1218,15 @@ export function createJournal(game, rootEl) {
     const ink = (a) => `rgba(${INK},${a})`;
     // the way she came, dotted, along the top
     const trail = [];
-    for (let i = 0; i <= 14; i++) trail.push([X(-0.46 + i * 0.05), Y(-0.83 + Math.sin(i * 0.9) * 0.008)]);
-    g.setLineDash([0.9, 2.3]); handLine(g, trail, rnd, 0.75, ink(0.55), 0.25); g.setLineDash([]);
-    // her: a pale disc with the floor's own figure in it (a ring), and a little ahead an arrow
-    const cx = X(0.36), cy = Y(-0.83), r0 = span * 0.07;
+    for (let i = 0; i <= 12; i++) trail.push([X(-0.62 + i * 0.055), Y(-0.83 + Math.sin(i * 0.9) * 0.008)]);
+    g.setLineDash([1, 2.2]); handLine(g, trail, rnd, 0.85, ink(0.6), 0.25); g.setLineDash([]);
+    // her: a pale disc with the floor's own figure in it (a ring), and well ahead of her an arrow
+    const cx = X(0.12), cy = Y(-0.83), r0 = span * 0.075;
     g.fillStyle = 'rgba(243,235,214,1)';
     g.beginPath(); g.arc(cx, cy, r0 * 1.25, 0, 6.2832); g.fill();
     g.beginPath(); g.arc(cx, cy, r0, 0, 6.2832); g.strokeStyle = ink(0.85); g.lineWidth = 0.95; g.stroke();
     g.beginPath(); g.arc(cx, cy, r0 * 0.55, 0, 6.2832); g.strokeStyle = ink(0.6); g.lineWidth = 0.6; g.stroke();
-    const ax = X(0.62), ay = Y(-0.83), al = span * 0.05;
+    const ax = X(0.6), ay = Y(-0.83), al = span * 0.05;
     handLine(g, [[ax - al * 1.6, ay], [ax, ay]], rnd, 0.8, ink(0.7), 0.2);
     handLine(g, [[ax - al * 0.7, ay - al * 0.55], [ax, ay], [ax - al * 0.7, ay + al * 0.55]], rnd, 0.8, ink(0.7), 0.2);
   }
@@ -1193,9 +1262,34 @@ export function createJournal(game, rootEl) {
   }
 
   // observations ------------------------------------------------------------------------------------
+  // Somebody keeps the book while the reader is away, and addresses them as 'you'. Those lines are in
+  // her hand. (A run of away-lines is all one hand.)
+  function awayHands(log) {
+    const hers = new Set();
+    for (let i = 0; i < log.length; i++) {
+      if (log[i]?.kind !== 'away') continue;
+      let j = i;
+      while (j + 1 < log.length && log[j + 1]?.kind === 'away') j++;
+      let you = false;
+      for (let k = i; k <= j; k++) if (/\byou(r)?\b/i.test(log[k].text || '')) { you = true; break; }
+      if (you) for (let k = i; k <= j; k++) hers.add(k);
+      i = j;
+    }
+    return hers;
+  }
+  // the binomials in a line nobody marked up, underlined as they would be by hand
+  function nameMarkup(text) {
+    if (/\*/.test(text)) return penMarkup(text);
+    const names = speciesList().map((r) => r.name).filter((n) => n && n.length > 3).sort((a, b) => b.length - a.length);
+    const h = esc(text);
+    if (!names.length) return h;
+    const re = new RegExp(names.map((n) => esc(n).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
+    return h.replace(re, (m) => `<u class="nb-bin">${m}</u>`);
+  }
   function obsItems() {
     const s = st(), log = Array.isArray(s.log) ? s.log : [];
     const items = [];
+    const hers = awayHands(log);
     let lastKey = '';
     for (let i = 0; i < log.length; i++) {
       const e = log[i];
@@ -1205,11 +1299,12 @@ export function createJournal(game, rootEl) {
         lastKey = k.key;
         items.push({ key: `day|${k.label}`, keepNext: true, lead: 1, build: () => el('div', 'nb-o-day', esc(cap(k.label)) + '.') });
       }
+      const her = hers.has(i);
       items.push({
-        key: `o|${e.t}|${e.text.length}|${i === 0 ? 0 : 1}`,
+        key: `o|${e.t}|${e.text.length}|${i === 0 ? 0 : 1}|${her ? 1 : 0}`,
         t: e.t || 0,
-        build: () => el('div', 'nb-o' + (e.kind === 'away' ? ' nb-o-away' : '') + (e.t > markT ? ' nb-new' : ''),
-          `<span class="nb-o-t">${clock(e.t || Date.now())}</span> — ${penMarkup(e.text)}`),
+        build: () => el('div', 'nb-o' + (e.kind === 'away' ? ' nb-o-away' : '') + (her ? ' nb-o-hers' : '') + (e.t > markT ? ' nb-new' : ''),
+          `<span class="nb-o-t">${clock(e.t || Date.now())}</span> — ${e.kind === 'away' ? nameMarkup(e.text) : penMarkup(e.text)}`),
       });
     }
     return items;

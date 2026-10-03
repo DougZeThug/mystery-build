@@ -276,6 +276,7 @@ body { overscroll-behavior: none; -webkit-user-select: none; user-select: none; 
 .nb-k-rest p { margin: 0; }
 .nb canvas.nb-tornrim { position: absolute; left: 0; top: 0; pointer-events: none; }
 .nb-water.nb-dry { opacity: 0.45; }
+.nb-torn .nb-body { bottom: 36%; }           /* her last page ends where it was torn */
 .nb-water {
   position: absolute; inset: 0; pointer-events: none; mix-blend-mode: multiply;
   background:
@@ -347,6 +348,10 @@ body { overscroll-behavior: none; -webkit-user-select: none; user-select: none; 
 }
 .nb-o-t { color: rgba(var(--lead), 0.58); }
 .nb-o-away { color: rgba(var(--lead), 0.74); }
+/* while the reader was away, somebody else kept the book */
+.nb-o-hers { font-style: italic; font-weight: 500; color: rgba(var(--ink), 0.86); text-shadow: 0 0 0.6px rgba(var(--ink), 0.4); }
+.nb-o-hers .nb-o-t { color: rgba(var(--ink), 0.55); }
+.nb-o-hers .nb-bin { text-decoration-color: rgba(var(--ink), 0.6); }
 .nb-bin { text-decoration: underline; text-decoration-thickness: 0.055em; text-underline-offset: 0.12em; text-decoration-color: rgba(var(--lead), 0.55); }
 /* unread at the last opening: a small graphite tick in the margin */
 .nb-o.nb-new { position: relative; }
