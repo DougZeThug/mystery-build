@@ -8,8 +8,8 @@ import { distToPolyline } from './field.js';
 import { nameFor, noteFor, colourFor, speciesRatioText, numberWord } from './naming.js';
 
 // Renderer encoding: instance 'state' float = code + progress (0..0.99) through the state.
-// 'cling' (11) is a mote state only: in instanceData a clinging singer is written as 'startle' (5)
-// with progress = 0.6·grip left (so the shader's shiver grows as its hold fails) plus FLAG.cling.
+// Free states (walk, feed, sleep, nestle) carry their pace instead; 'cling' (11) carries how much
+// of its grip it has spent (0 = just caught hold, 0.99 = about to be thrown), and FLAG.cling.
 export const STATES = ['walk', 'feed', 'split', 'fuse', 'eat', 'startle', 'sleep', 'nestle', 'fall', 'die', 'born', 'cling'];
 export const STATE_CODE = Object.freeze(Object.fromEntries(STATES.map((s, i) => [s, i])));
 // instance flags (bits): aurata 1, sleeping 2, fused-flash 4, nestle 8, floating (choir/floor) 16,
@@ -48,7 +48,7 @@ export const TUNE = {
   harm: 0.55,            // ...and from disagreeable sound, relative (discord starves more slowly than harmony feeds)
   selfExclude: 0.55,     // share of a species' own song it cannot live on
   hearMax: 0.85,         // they hear the plate's total loudness only up to this (an over-driven plate starves no faster)
-  deafen: 0.6,           // discord's harm × (1 - deafen·overdrive): a screaming plate is din, not discord
+  deafen: 0.85,          // discord's harm × (1 - deafen·overdrive): a screaming plate is din, not discord
   beat: 0.5, beatFrom: 10, beatScale: 12,   // a crowded pitch beats: unison value 1 - beat·(voices - from)/scale
   metab: 0.0075, metabBase: 0.45, metabSlope: 1.0,   // metabolism = metab·(base + slope·e): bright singers burn faster
   ageCost: 0.004, crowdK: 21, crowdStress: 0.06, stillPenalty: 0.45, detunePenalty: 9,
@@ -65,8 +65,8 @@ export const TUNE = {
   // while the player drives the plate; when it runs out the singer is THROWN (the only way to fall).
   // Near a resting finger, a landed moth or a felt damper a singer never loses its grip.
   clingV: 0.55, clingOver: 0.5, clingCalm: 0.8, clingCreep: 0.45, braceHarm: 0.35,
-  clingBase: 1.6, clingE: 2.4, clingDrain: 0.7, clingDrainV: 0.6, clingRegen: 0.15, clingDazed: 0.35,
-  clingMin: 1.2, clingMinE: 1.0,   // and every throw follows at least this long a cling (s, + clingMinE·e)
+  clingBase: 2.4, clingE: 2.8, clingDrain: 0.7, clingDrainV: 0.6, clingRegen: 0.15, clingDazed: 0.35,
+  clingMin: 1.6, clingMinE: 1.0,   // and every throw follows at least this long a cling (s, + clingMinE·e)
   throwBase: 0.9, throwV: 0.9, throwOver: 0.6, shelterHold: 0.26, shelterDamper: 0.15,
   // the keeper (after the first Floor): one, immortal, walks the rim
   keeperR: 2.2, keeperSpeed: 0.028, keeperRun: 0.16, keeperRim: 0.8, keeperDelay: 2.5, keeperBorn: 4.5,
@@ -1400,9 +1400,10 @@ export function createLife(game) {
       // the keeper never ages: a constant warm age reads as golden-white in the shader
       inst[o + 4] = m.keeper ? TUNE.keeperGlow : clamp(m.age / m.life, 0, 1);
       // timed states carry their progress; walking carries its pace (for the feet); a clinging
-      // singer is drawn as startled, its shiver growing as its grip fails
-      let code = STATE_CODE[m.state], prog;
-      if (m.state === 'cling') { code = STATE_CODE.startle; prog = 0.6 * clamp(m.grip / gripMax(m), 0, 1); }
+      // singer carries the share of its grip it has spent (its tremble may grow as its hold fails)
+      const code = STATE_CODE[m.state];
+      let prog;
+      if (m.state === 'cling') prog = m.shelter ? 0 : clamp(1 - m.grip / gripMax(m), 0, 0.99);
       else prog = FREE[m.state] ? clamp(m.spd / (TUNE.speedMax * 3.2), 0, 0.99)
         : m.dur > 0 ? clamp(m.st / m.dur, 0, 0.99) : 0;
       inst[o + 5] = code + prog;

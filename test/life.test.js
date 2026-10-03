@@ -68,7 +68,7 @@ test('no NaN, cap respected, instance data consistent under violent and long pla
   for (let i = 0; i < inst.count * 16; i++) assert.ok(Number.isFinite(inst.data[i]));
   for (let i = 0; i < inst.count; i++) {
     const code = Math.floor(inst.data[i * 16 + 5]);
-    assert.ok(code >= 0 && code <= STATE_CODE.born);
+    assert.ok(code >= 0 && code <= STATE_CODE.cling);
   }
   for (const c of g.life.chorus()) assert.ok(c.amp > 0 && c.amp <= 1.0 && typeof c.mode === 'string');
   g.life.destroy();
@@ -198,7 +198,7 @@ test('violence: a singer clings (state, flag 256) for seconds before it can fall
       const inst = g.life.instanceData();
       for (let j = 0; j < inst.count; j++) if (inst.data[j * 16 + 15] & FLAG.cling) {
         clingFlag = true;
-        assert.equal(Math.floor(inst.data[j * 16 + 5]), STATE_CODE.startle, 'cling is drawn as a startle shiver');
+        assert.equal(Math.floor(inst.data[j * 16 + 5]), STATE_CODE.cling, 'cling has its own state code for the renderer');
       }
     }
   }
@@ -226,11 +226,40 @@ test('violence: a singer clings (state, flag 256) for seconds before it can fall
       if (shelter === 'damper') g2.field.dampers = [{ u: spot.u, v: spot.v, r: 0.06 }];
       step(g2, 1 / 30, modes[Math.floor(t2 / 1.5) % modes.length], 1.15); t2 += 1 / 30;
     }
-    const near = (m) => Math.hypot(m.u - spot.u, m.v - spot.v) < 0.25;
     assert.equal(ev2.seen['mote:fall'].filter((e) => ms2.includes(e.mote)).length, 0, `${shelter}: a sheltered singer fell`);
-    void near;
     ev2.off(); g2.life.destroy();
   }
+
+  // pinned at an antinode (no creeping away): every throw follows a visible cling of at least
+  // clingMin s, and the strong hold on longer than the weak
+  const creep = TUNE.clingCreep;
+  TUNE.clingCreep = 0;
+  try {
+    const held = {};
+    for (const e0 of [0.2, 0.95]) {
+      const g3 = makeGame(43);
+      const md = modeById('4.7+');
+      let best = null, bf = 0;
+      for (let u = -0.6; u <= 0.6; u += 0.02) for (let v = -0.6; v <= 0.6; v += 0.02) {
+        const f = Math.abs(evalMode(md, u, v));
+        if (Math.hypot(u, v) > 0.25 && f > bf) { bf = f; best = { u, v }; }
+      }
+      step(g3, 1.5, '4.7+', 1.15);
+      const m = g3.life.spawn('1.3+', best.u, best.v, e0, { silent: true });
+      let tc = null, tt = null, t3 = 0, lastCling = null;
+      for (let i = 0; i < 12 * 30 && tt === null; i++) {
+        step(g3, 1 / 30, '4.7+', 1.15); t3 += 1 / 30;
+        if (m.state === 'cling') { if (tc === null) tc = t3; if (lastCling === null) lastCling = t3; } else if (m.state !== 'startle') lastCling = null;
+        if (m.thrown) tt = t3;
+      }
+      assert.ok(tc !== null && tt !== null, `e=${e0}: clung ${tc}, thrown ${tt}`);
+      assert.ok(tt - lastCling >= TUNE.clingMin + TUNE.clingMinE * 0.1 - 0.05, `e=${e0}: thrown after only ${(tt - lastCling).toFixed(2)} s of clinging`);
+      held[e0] = tt - tc;
+      g3.life.destroy();
+    }
+    assert.ok(held[0.95] > held[0.2] + 0.8, `strong held ${held[0.95].toFixed(2)} s, weak ${held[0.2].toFixed(2)} s`);
+    assert.ok(held[0.2] >= 1.2 && held[0.95] <= 5, `cling times ${held[0.2].toFixed(2)} / ${held[0.95].toFixed(2)} s`);
+  } finally { TUNE.clingCreep = creep; }
 });
 
 test('the keeper: arrives once after the Floor, at the centre, immortal, silent, persistent', () => {
