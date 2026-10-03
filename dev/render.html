@@ -41,7 +41,7 @@
 <script type="module">
 // Renderer harness. Drives the real field and sand; singers are faked here (or ?life uses the real one).
 //   ?mode=3.5-,2.4+  &amp=0.8   modes sounding (equal split)     &secs=12   pre-simulate sand
-//   &singers=9   &states   (a gallery of born / die / fall / fuse / nestle / sleep / aurata / old)
+//   &singers=9   &states   (a gallery of born / die / fall / fuse / nestle / sleep / aurata / old / cling / keeper)
 //   &dark=0..1 (light level, implies cord pulled)   &choir   &floor   &engr   &floorEngr
 //   &cracks=2 &gild=0.6 &heal   &wear   &gold=300   &clean (no panel)   &t=30 (start clock)
 //   &life   use src/sim/life.js instead of fake singers     &hold=1 (pause the sim after setup)
@@ -131,27 +131,32 @@ const STATE_DEMO = [
   { code: 10, period: 2.4 }, { code: 9, period: 2.0 }, { code: 9, period: 2.0, old: true }, { code: 8, period: 1.6 },
   { code: 3, period: 1.7, flags: 4 }, { code: 7, flags: 8 }, { code: 6, flags: 2 }, { code: 4, period: 0.8 },
   { code: 5, period: 0.6 }, { code: 2, period: 0.9 }, { code: 0, old: true }, { code: 0, aurata: true }, { code: 0, hungry: true },
+  { code: 5, cling: true }, { code: 0, keeper: true },
 ];
+// flag bits as life.js writes them: aurata 1, sleep 2, flash 4, nestle 8, float 16, lunge 32, keeper 64,
+// death by age 128, cling 256, old 512
 const fakeLife = {
   instanceData() {
     let c = 0;
     for (let i = 0; i < fake.length && c < 64; i++) {
       const m = fake[i], o = c * 16;
-      let code = 0, prog = 0.3, flags = m.flags, age = m.age, e = m.e;
+      let code = 0, prog = 0.3, flags = m.flags, age = m.age, e = m.e, r = m.r, comps = m.sp.comps;
       if (toggles.states) {
         const d = STATE_DEMO[i % STATE_DEMO.length];
         code = d.code;
         prog = d.period ? (game.t / d.period + i * 0.13) % 1 : 0.4;
         flags = (d.flags || 0) | (d.aurata ? 1 : 0) | (m.sp.aurata ? 1 : 0);
-        if (d.old) { age = d.code === 9 ? 0.99 : 0.93; flags |= 64; }
+        if (d.old) { age = d.code === 9 ? 0.99 : 0.93; flags |= d.code === 9 ? 128 : 512; }
         if (d.hungry) e = 0.08;
+        if (d.cling) { prog = 0.6 * (0.5 + 0.5 * Math.sin(game.t * 0.7)); flags |= 256; }
+        if (d.keeper) { flags = 64; age = 0.86; e = 0.9; r = 0.084; comps = ['floor']; }
       }
       if (toggles.choir || toggles.floor) flags |= 16;
       if (toggles.dark && code === 0) { flags |= 2; }
-      inst[o] = m.u; inst[o + 1] = m.v; inst[o + 2] = m.r; inst[o + 3] = e; inst[o + 4] = age;
+      inst[o] = m.u; inst[o + 1] = m.v; inst[o + 2] = r; inst[o + 3] = e; inst[o + 4] = age;
       inst[o + 5] = code + Math.min(0.99, prog);
       for (let k = 0; k < 3; k++) {
-        const md = modeById(m.sp.comps[k]);
+        const md = comps[k] === 'floor' ? null : modeById(comps[k]);
         inst[o + 6 + k * 3] = md ? md.n : 0; inst[o + 7 + k * 3] = md ? md.m : 0; inst[o + 8 + k * 3] = md ? md.s : 0;
       }
       inst[o + 15] = flags;

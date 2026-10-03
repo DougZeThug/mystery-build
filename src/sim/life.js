@@ -841,7 +841,9 @@ export function createLife(game) {
     const V = m.F * A + TUNE.clingOver * overdrive;
     const hold0 = game.hold;
     m.shelter = shelterAt(m.u, m.v);
-    if (m.state !== 'cling') m.grip = Math.min(gripMax(m), m.grip + TUNE.clingRegen * dt);
+    // a singer gets its grip back only as the plate calms: while it still screams, a moment's
+    // respite on a still line does not undo what the last minutes took
+    if (m.state !== 'cling') m.grip = Math.min(gripMax(m), m.grip + TUNE.clingRegen * (1 - overdrive) * dt);
     if (V > TUNE.clingV && FREE[m.state] && !floorOn && !choirOn && !(m.nest && (hold0 || moth))) {
       setState(m, 'cling'); m.calm = 0; m.hunt = null; m.lunge = 0; m.spd *= 0.4;
       bus.emit('mote:cling', { mote: m });

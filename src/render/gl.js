@@ -725,11 +725,13 @@ export function createRenderer(canvas, game) {
     // Frame pacing: if frames run long for a couple of seconds, render the scene at a lower internal
     // resolution (0.85, then 0.7; the composite upsamples); climb back when there is headroom.
     function adapt(now) {
-      const dtm = lastNow ? now - lastNow : 16.7;
+      let dtm = lastNow ? now - lastNow : 16.7;
       lastNow = now;
-      if (dtm <= 0 || dtm > 120) return;               // hidden tab, a hitch, or the first frame
+      if (dtm <= 0 || dtm > 1000) return;              // a hidden tab, or the first frame
+      // a lone hitch barely moves the average; a device that is simply slow keeps it high
+      const dts = Math.min(dtm, 500) / 1000;
+      dtm = Math.min(dtm, 120);
       frameEma += (dtm - frameEma) * 0.05;
-      const dts = dtm / 1000;
       if (frameEma > 21) { slowFor += dts; fastFor = 0; } else if (frameEma < 13.5) { fastFor += dts; slowFor = 0; } else { slowFor = 0; fastFor = 0; }
       let next = scale;
       if (slowFor > 2.5 && scale > 0.71) next = scale > 0.9 ? 0.85 : 0.7;
