@@ -518,7 +518,7 @@ void main() {
     // the floor: the whole plate one slow white-gold breath
     if (uFloor > 0.0) {
       float pulse = 0.6 + 0.4 * sin(uTime * 2.2);
-      emiss += vec3(1.0, 0.80, 0.52) * uFloor * (0.025 + 0.12 * vib * vib) * pulse * bare;
+      emiss += vec3(1.0, 0.72, 0.40) * uFloor * (0.007 + 0.08 * vib * vib) * pulse * bare;
     }
 
     // ---- centre clamp: steel hex nut on a turned washer ----------------------------------------
@@ -1010,7 +1010,7 @@ void main() {
 
   // grade: choir warms everything toward gold; the floor whitens it
   c *= mix(vec3(1.0), vec3(1.10, 0.97, 0.74), uChoir * 0.6);
-  c = mix(c, c * vec3(1.05, 1.02, 0.95) + vec3(0.012, 0.01, 0.006), uFloor * 0.5);
+  c = mix(c, c * vec3(1.06, 1.0, 0.9) + vec3(0.01, 0.007, 0.003), uFloor * 0.5);
   c += vec3(1.0, 0.95, 0.86) * uFlash * 0.18;
 
   // vignette
