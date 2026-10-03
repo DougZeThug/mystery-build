@@ -61,7 +61,7 @@ export const TUNE = {
   ageCost: 0.004, crowdK: 21, crowdStress: 0.06, stillPenalty: 0.45, detunePenalty: 9,
   // they sing into the room a bow leaves, and hush when it speaks: by `hush` once the player's
   // drive reaches hushAt, however softly it is played, so the played figure wins the plate
-  voiceRoom: 1.0, hush: 0.75, hushAt: 0.2,
+  voiceRoom: 1.0, hush: 0.85, hushAt: 0.2,
   // division
   splitE: 0.86, splitAge: 25, splitSand: 10, splitCool: 22, splitTake: 10, mutate: 0.06,
   lifeMin: 240, lifeMax: 480, aurataLife: 1.5,
@@ -346,8 +346,8 @@ export function createLife(game) {
     if (cause !== 'eaten') m.partner = null;
   }
 
-  // final removal (crumble / swallowed / lost)
-  function remove(m) {
+  // final removal (crumble / swallowed / lost); quiet: no event (the time away keeps its own tally)
+  function remove(m, quiet = false) {
     if (m.dead) return;
     m.dead = true;
     const sp = m.spec;
@@ -361,7 +361,7 @@ export function createLife(game) {
     } else if (m.cause === 'eaten') {
       sand?.drop?.(m.u, m.v, 6, 0, 0.02);
     }
-    if (m.cause) bus.emit('mote:death', { mote: m, cause: m.cause });
+    if (m.cause && !quiet) bus.emit('mote:death', { mote: m, cause: m.cause });
   }
 
   // --- field sampling (f and grad f, bilinear over central differences) -----------------------
@@ -759,7 +759,10 @@ export function createLife(game) {
     m._flags = 0;
   }
 
-  function energy(m, dt) {
+  // a singer's energy, as it stands: dE/dt = EA - EB·e (scratch outputs, no allocation). Bright
+  // singers burn faster, so energy relaxes toward EA/EB rather than running away.
+  let EA = 0, EB = 0;
+  function energyRates(m) {
     const sp = m.spec;
     let feed = sp.feed;
     if (m.state === 'cling') feed *= feed > 0 ? 0.5 : TUNE.braceHarm;   // pressed to the bronze, it holds its breath
@@ -768,13 +771,15 @@ export function createLife(game) {
       const still = clamp(m.F / (A * A + 0.02), 0, 1);
       feed *= m.vig * crowdMul * (1 - TUNE.stillPenalty * still) * (sp.aurata ? 1 : detuneMul);
     }
-    let dE = TUNE.feedGain * (feed > 0 ? feed : feed * TUNE.harm)
-      - TUNE.metab * (TUNE.metabBase + TUNE.metabSlope * clamp(m.e, 0, 1)) * (darkNow ? 0.5 : 1) *
-        (1 + TUNE.crowdStress * Math.max(0, m.near - 3))
-      - TUNE.ageCost * (m.age / m.life);
-    if (m.state === 'nestle' && game.hold) dE += 0.01;   // a faint purr against the finger
-    if (m.comfort > 0) dE += TUNE.keeperComfort * m.comfort;   // and a little comfort beside the keeper
-    m.e = clamp(m.e + dE * dt, -0.01, choirOn ? Math.max(0.84, Math.min(m.e, 1)) : 1);   // the choir holds, it does not breed
+    const burn = TUNE.metab * (darkNow ? 0.5 : 1) * (1 + TUNE.crowdStress * Math.max(0, m.near - 3));
+    EB = burn * TUNE.metabSlope;
+    EA = TUNE.feedGain * (feed > 0 ? feed : feed * TUNE.harm) - burn * TUNE.metabBase - TUNE.ageCost * (m.age / m.life);
+    if (m.state === 'nestle' && game.hold) EA += 0.01;   // a faint purr against the finger
+    if (m.comfort > 0) EA += TUNE.keeperComfort * m.comfort;   // and a little comfort beside the keeper
+  }
+  function energy(m, dt) {
+    energyRates(m);
+    m.e = clamp(m.e + (EA - EB * clamp(m.e, 0, 1)) * dt, -0.01, choirOn ? Math.max(0.84, Math.min(m.e, 1)) : 1);   // the choir holds, it does not breed
   }
 
   // unit vector toward a point, into scratch (no allocation): STX, STY, STD
@@ -1336,6 +1341,24 @@ export function createLife(game) {
     }
   }
   function anyMoteOf(sp) { for (const m of motes) if (!m.dead && m.spec === sp) return true; return false; }
+  // every record agrees with the plate (after aggregate()): a kind with no living singer is
+  // extinct, whatever became of its last one (crumbling as the plate was saved, say)
+  function settleRecords(now = Date.now()) {
+    for (const id in state.species) {
+      const r = state.species[id];
+      if (!r || typeof r !== 'object' || r.keeper || id === KEEPER_ID) continue;
+      const n = species[id]?.n || 0;
+      r.count = n;
+      if (n > 0) r.extinct = false;
+      else if (!r.extinct) { r.extinct = true; r.extinctAt ||= now; }
+    }
+  }
+  function compactMotes() {
+    let w = 0;
+    for (let i = 0; i < motes.length; i++) { const m = motes[i]; if (!m.dead) motes[w++] = m; }
+    motes.length = w;
+  }
+  function livingCount() { let n = 0; for (const m of motes) if (!m.dead && !m.keeper && m.state !== 'die' && m.state !== 'fall') n++; return n; }
 
   // --- wear: walking polishes the bronze ------------------------------------------------------
   function wearStep(dt) {
@@ -1450,10 +1473,7 @@ export function createLife(game) {
       const m = motes[i];
       if (!m.dead) stepMote(m, dt);
     }
-    // compact
-    let w = 0;
-    for (let i = 0; i < motes.length; i++) { const m = motes[i]; if (!m.dead) motes[w++] = m; }
-    motes.length = w;
+    compactMotes();
 
     tryBirth(dt);
     aggregate();
@@ -1590,8 +1610,10 @@ export function createLife(game) {
     for (const m of motes) m.dead = true;
     motes.length = 0;
     keeperMote = null;
+    // each part, and each singer, on its own: one damaged entry costs only itself
+    const each = (list, fn) => { if (Array.isArray(list)) for (const x of list) { try { fn(x); } catch (e) { console.warn('[life] skipped a damaged entry', e); } } };
+    each(obj.species, (s) => { if (s && s[0] !== KEEPER_ID) getSpecies(s[1], !!s[2], { gen: s[3] || 0, parents: s[4] || null }); });
     try {
-      for (const s of obj.species || []) if (s && s[0] !== KEEPER_ID) getSpecies(s[1], !!s[2], { gen: s[3] || 0, parents: s[4] || null });
       const kp = Array.isArray(obj.kp) ? obj.kp : null;
       if (kp && [kp[1], kp[2]].every(Number.isFinite)) {
         const m = summonKeeper(false, clamp(kp[1], -0.9, 0.9), clamp(kp[2], -0.9, 0.9));
@@ -1599,57 +1621,70 @@ export function createLife(game) {
         if (Number.isFinite(kp[3]) && Number.isFinite(kp[4]) && Math.hypot(kp[3], kp[4]) > 0.1) { const l = Math.hypot(kp[3], kp[4]); m.hx = kp[3] / l; m.hy = kp[4] / l; }
         m.age = Math.max(0, +kp[5] || 0); m.born = kp[6] || Date.now(); m.phase = Number.isFinite(kp[7]) ? kp[7] : m.phase;
       }
-      for (const a of obj.motes || []) {
-        const [id, spId, u, v, hx, hy, e, age, life, gen, born, phase, cool] = a;
-        if (spId === KEEPER_ID) continue;               // exactly one, restored above (or by state.seen.keeper)
-        let sp = species[spId];
-        if (!sp && typeof spId === 'string') sp = getSpecies(spId.replace('*', '').split('|'), spId.endsWith('*'));
-        if (!sp || ![u, v, e, age, life].every(Number.isFinite)) continue;
-        if (motes.length >= CAP) break;
-        const m = makeMote(sp, clamp(u, -0.95, 0.95), clamp(v, -0.95, 0.95), clamp(e, 0.01, 1), gen | 0, 'walk');
-        m.id = id | 0 || m.id; m.hx = Number.isFinite(hx) ? hx : m.hx; m.hy = Number.isFinite(hy) ? hy : m.hy;
-        const hl = Math.hypot(m.hx, m.hy) || 1; m.hx /= hl; m.hy /= hl;
-        m.age = Math.max(0, age); m.life = Math.max(60, life); m.born = born || Date.now();
-        m.phase = Number.isFinite(phase) ? phase : m.phase; m.cool = Number.isFinite(cool) ? cool : m.cool;
-        m.grace = 1; m.dur = 0;
-      }
-      nextId = Math.max(nextId, obj.nextId | 0, ...motes.map((m) => m.id + 1));
+    } catch (e) { console.warn('[life] could not restore the keeper', e); }
+    each(obj.motes, (a) => {
+      const [id, spId, u, v, hx, hy, e, age, life, gen, born, phase, cool] = a;
+      if (spId === KEEPER_ID || motes.length >= CAP) return;   // the keeper: exactly one, restored above (or by state.seen.keeper)
+      let sp = species[spId];
+      if (!sp && typeof spId === 'string') sp = getSpecies(spId.replace('*', '').split('|'), spId.endsWith('*'));
+      if (!sp || ![u, v, e, age, life].every(Number.isFinite)) return;
+      const m = makeMote(sp, clamp(u, -0.95, 0.95), clamp(v, -0.95, 0.95), clamp(e, 0.01, 1), gen | 0, 'walk');
+      m.id = id | 0 || m.id; m.hx = Number.isFinite(hx) ? hx : m.hx; m.hy = Number.isFinite(hy) ? hy : m.hy;
+      const hl = Math.hypot(m.hx, m.hy) || 1; m.hx /= hl; m.hy /= hl;
+      m.age = Math.max(0, age); m.life = Math.max(60, life); m.born = born || Date.now();
+      m.phase = Number.isFinite(phase) ? phase : m.phase; m.cool = Number.isFinite(cool) ? cool : m.cool;
+      m.grace = 1; m.dur = 0;
+    });
+    try {
+      for (const m of motes) if (m.id >= nextId) nextId = m.id + 1;
+      nextId = Math.max(nextId, obj.nextId | 0);
       T = +obj.t || 0;
       quickBy.fill(0);
       const qs = Array.isArray(obj.qs) ? obj.qs : obj.qm ? [[obj.qm, obj.q]] : [];   // (older saves kept one)
       for (const e of qs) { const md = Array.isArray(e) ? modeById(e[0]) : null; if (md && Number.isFinite(+e[1])) quickBy[md.index] = clamp(+e[1], 0, 2); }
       choirCool = +obj.cc || 0; floorCool = +obj.fc || 0; floorArmed = obj.fa !== 0;
-    } catch (e) {
-      console.warn('[life] could not restore singers', e);
-    }
+    } catch (e) { console.warn('[life] could not restore the plate\'s timers', e); }
     aggregate();
-    for (const sp of speciesList) { const r = recordFor(sp, false); if (r) { r.count = sp.n; if (sp.n > 0) r.extinct = false; } }
+    settleRecords();
     buildChorus(darkNow);
     buildPopulations();
   }
 
   // --- time away: a coarse, sand-free evolution -----------------------------------------------
+  // Steps of 5-15 s; on a slow device the step lengthens (up to offlineMaxStep) so the whole span
+  // still fits the budget. Energy is integrated exactly over a step, so a long step is coarse, not
+  // wrong: no stretch of the absence is ever skipped or lived on age alone.
   function simulateOffline(seconds) {
-    const t0 = (typeof performance !== 'undefined' ? performance : Date).now();
+    const clock = typeof performance !== 'undefined' ? performance : Date;
+    const t0 = clock.now();
     const secs = clamp(+seconds || 0, 0, 3 * 3600);
     const notes = [];
     if (secs < 30) return notes;
     const dark = game.light ? game.light.on === false : false;
-    darkNow = dark; A = 0.35; detuneMul = Math.max(0.5, 1 - TUNE.detunePenalty * (field.detune || 0));
-    const startCount = motes.filter((m) => !m.dead && !m.keeper).length;
-    const startAlive = new Set(motes.filter((m) => !m.dead && !m.keeper).map((m) => m.spec));
+    const wasDark = darkNow;
+    darkNow = dark; A = 0.35; overdrive = 0; detuneMul = Math.max(0.5, 1 - TUNE.detunePenalty * (field.detune || 0));
+    let births = 0, splits = 0, deaths = 0, eaten = 0, fused = 0, oldAge = 0, fell = 0, peak = 0;
+    // whoever was crumbling, being swallowed or falling when the plate was left has long gone
+    for (const m of motes) {
+      if (m.dead || m.keeper || (m.state !== 'die' && m.state !== 'fall')) continue;
+      remove(m, true); deaths++;
+      if (m.cause === 'age') oldAge++; else if (m.cause === 'fall') fell++;
+    }
+    compactMotes();
+    const startCount = livingCount();
+    const startAlive = new Set();
+    for (const m of motes) if (!m.keeper) startAlive.add(m.spec);
     const born = new Set(), lost = new Set();
-    let births = 0, deaths = 0, eaten = 0, fused = 0, oldAge = 0;
-    const step = secs > 3600 ? 15 : secs > 900 ? 10 : 5;
-    const steps = Math.ceil(secs / step), dt = secs / steps;
     const nowMs = Date.now();
-    for (let s = 0; s < steps; s++) {
-      if (((typeof performance !== 'undefined' ? performance : Date).now() - t0) > 85) {
-        // out of budget: let the remaining years pass on age alone
-        const left = (steps - s) * dt;
-        for (const m of motes) { m.age += left; if (!m.keeper && m.age >= m.life) { m.dead = true; deaths++; oldAge++; } }
-        break;
+    let dt = secs > 3600 ? 15 : secs > 900 ? 10 : 5, simT = 0, steps = 0;
+    while (simT < secs - 1e-6) {
+      if (steps >= 4) {                               // a slow device: fit what is left into the budget
+        const spent = clock.now() - t0, room = (TUNE.offlineBudget - spent) / (spent / steps);
+        dt = clamp(room >= 1 ? (secs - simT) / room : TUNE.offlineMaxStep, dt, TUNE.offlineMaxStep);
       }
+      const h = Math.min(dt, secs - simT);
+      const agoMs = (secs - simT) * 1000;            // how long before the return this step began
+      simT += h; steps++;
       aggregate();
       if (!N) break;
       crowdMul = crowdOf(N);
@@ -1660,14 +1695,16 @@ export function createLife(game) {
         const m = motes[i];
         if (m.dead) continue;
         if (m.keeper) {                                // she walks the rim, as ever
-          m.age += dt; rimPoint(Math.atan2(m.v, m.u) + dt * 0.006); m.u = RPU; m.v = RPV;
+          m.age += h; rimPoint(Math.atan2(m.v, m.u) + h * 0.006); m.u = RPU; m.v = RPV;
           m.state = 'walk'; m.st = 0; m.dur = 0;
           continue;
         }
         m.state = 'walk'; m.st = 0; m.dur = 0; m.partner = null; m.hunt = null; m.flash = 0;
-        m.F = 0.05 * A * A; m.near = 2;
-        energy(m, dt);
-        m.age += dt; m.cool -= dt;
+        m.F = 0.05 * A * A; m.near = 2; m.comfort = 0;
+        energyRates(m);                                // exact over the step: e relaxes toward EA/EB
+        if (EB > 1e-9) { const eq = EA / EB; m.e = eq + (m.e - eq) * Math.exp(-EB * h); } else m.e += EA * h;
+        m.e = clamp(m.e, -0.01, 1);
+        m.age += h; m.cool -= h;
         // wander a little so positions are not frozen
         m.u = clamp(m.u + gauss() * 0.04, -0.85, 0.85); m.v = clamp(m.v + gauss() * 0.04, -0.85, 0.85);
         if (m.e <= 0 || m.age >= m.life) {
@@ -1676,13 +1713,13 @@ export function createLife(game) {
           else bump(m.spec, 'hungerDeaths');
           continue;
         }
-        if (!dark && m.e > TUNE.splitE && m.age > TUNE.splitAge && m.cool <= 0 && motes.length < CAP && rng.next() < 1 - Math.exp(-dt / 25)) {
+        if (!dark && m.e > TUNE.splitE && m.age > TUNE.splitAge && m.cool <= 0 && motes.length < CAP && rng.next() < 1 - Math.exp(-h / 25)) {
           let sp = m.spec;
           if (rng.next() < TUNE.mutate) { const c = mutateComps(sp); if (c) sp = getSpecies(c, sp.aurata, { gen: sp.gen + 1, parents: [sp.id, sp.id] }); }
           const ch = makeMote(sp, clamp(m.u + gauss() * 0.05, -0.85, 0.85), clamp(m.v + gauss() * 0.05, -0.85, 0.85), 0.45, m.gen + 1, 'walk');
           ch.dur = 0; ch.grace = 0; m.e = 0.45; m.cool = ch.cool = TUNE.splitCool;
-          births++; bump(m.spec, 'splits');
-          if (!state.species[sp.id]) { recordFor(sp).firstSeen = nowMs - (secs - s * dt) * 1000; born.add(sp); }
+          splits++; bump(m.spec, 'splits');
+          if (!state.species[sp.id]) { recordFor(sp).firstSeen = nowMs - agoMs; born.add(sp); }
           bump(sp, 'births');
         }
       }
@@ -1690,7 +1727,7 @@ export function createLife(game) {
       if (!dark) for (let i = 0; i < alive.length; i++) for (let j = i + 1; j < alive.length; j++) {
         const a = alive[i], b = alive[j];
         const c = rel(a, b);
-        const meet = 1.2e-4 * a.n * b.n * dt;      // encounter rate, calibrated against the live plate
+        const meet = 1.2e-4 * a.n * b.n * h;       // encounter rate, calibrated against the live plate
         if (c < TUNE.eatCons && rng.next() < 1 - Math.exp(-meet)) {
           const pa = pickMote(a), pb = pickMote(b);
           if (!pa || !pb) continue;
@@ -1705,7 +1742,7 @@ export function createLife(game) {
           const ch = makeMote(sp, (pa.u + pb.u) / 2, (pa.v + pb.v) / 2, (pa.e + pb.e) / 2, Math.max(pa.gen, pb.gen) + 1, 'walk');
           ch.dur = 0; ch.grace = 0; fused++;
           bump(a, 'fusions'); bump(b, 'fusions');
-          if (!state.species[sp.id]) { recordFor(sp).firstSeen = nowMs - (secs - s * dt) * 1000; born.add(sp); }
+          if (!state.species[sp.id]) { recordFor(sp).firstSeen = nowMs - agoMs; born.add(sp); }
           bump(sp, 'births');
         }
       }
@@ -1714,36 +1751,52 @@ export function createLife(game) {
         let sum2 = 0, best = null, bv = 0;
         for (const sp of alive) { const a2 = sp.a * sp.a; sum2 += a2; if (a2 > bv) { bv = a2; best = sp; } }
         const sparse = Math.pow(Math.max(0, 1 - N / TUNE.songCrowd), 1.5);
-        if (best && best.nc === 1 && bv / sum2 > TUNE.birthShare && Math.sqrt(sum2) > TUNE.songTotal && rng.next() < sparse * dt / 40) {
+        if (best && best.nc === 1 && bv / sum2 > TUNE.birthShare && Math.sqrt(sum2) > TUNE.songTotal && rng.next() < 1 - Math.exp(-sparse * h / 40)) {
           makeMote(best, rng.next() * 1.4 - 0.7, rng.next() * 1.4 - 0.7, TUNE.newbornE, 0, 'walk').dur = 0;
           births++; bump(best, 'births');
         }
       }
-      let w = 0;
-      for (const m of motes) if (!m.dead) motes[w++] = m;
-      motes.length = w;
+      compactMotes();
+      peak = Math.max(peak, livingCount());
       aggregate();
       for (const sp of alive) { const r = recordFor(sp); r.count = sp.n; if (sp.n > r.peak) r.peak = sp.n; }
     }
     // reconcile records
+    compactMotes();
     aggregate();
     const endAlive = new Set(alive);
+    const now = Date.now();
     for (const sp of speciesList) {
       const r = recordFor(sp, false);
-      if (!r) continue;
+      if (!r || sp.keeper) continue;
       r.count = sp.n;
-      if (sp.n === 0 && !r.extinct && (startAlive.has(sp) || born.has(sp))) { r.extinct = true; r.extinctAt = Date.now(); lost.add(sp); }
-      if (sp.n > 0) { r.extinct = false; r.lastSeen = Date.now(); }
+      if (sp.n === 0 && !r.extinct && (startAlive.has(sp) || born.has(sp))) { r.extinct = true; r.extinctAt = now; lost.add(sp); }
+      if (sp.n > 0) { r.extinct = false; r.lastSeen = now; }
       refreshNote(r, sp);
     }
+    settleRecords(now);
     for (const m of motes) { m.state = 'walk'; m.st = 0; m.dur = 0; m.grace = m.keeper ? 1e9 : 1; m.r = TUNE.rBase * (m.keeper ? TUNE.keeperR : 1); m.thrown = false; }
-    darkNow = false;
+    choirCool = Math.max(0, choirCool - secs); floorCool = Math.max(0, floorCool - secs);
+    // what the room keeps count of (progress tallies these from events while someone watches)
+    const st = state.stats;
+    if (st) {
+      const add = (k, n) => { if (n) st[k] = (+st[k] || 0) + n; };
+      add('births', births); add('splits', splits); add('deaths', deaths); add('devoured', eaten); add('fusions', fused); add('fell', fell);
+      st.maxPop = Math.max(+st.maxPop || 0, peak);
+    }
+    if (births || fused || oldAge) {
+      const seen = state.seen && typeof state.seen === 'object' ? state.seen : (state.seen = {});
+      if (births) seen.firstBirth = true;
+      if (fused) seen.firstFusion = true;
+      if (oldAge) seen.firstGold = true;
+    }
+    darkNow = wasDark;
     buildChorus(dark); buildPopulations();
 
     // the field notes
     const mins = Math.round(secs / 60);
     const gens = Math.floor(secs / 340);
-    const endCount = motes.filter((m) => !m.keeper).length;
+    const endCount = livingCount();
     let lead;
     if (!startCount && !endCount) {
       lead = mins >= 90 ? `While you were away: ${timeWords(secs)} of silence. The plate did not stir.` : `The plate lay quiet for ${timeWords(secs)}.`;

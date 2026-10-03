@@ -512,6 +512,8 @@ export function createSand(field, { cap = 26000, D = 256, state = null, bus = nu
     const g = crack.gold, len = geo.len, cum = geo.cum, n = geo.n;
     const s0 = cum[seg.index] + seg.t * len[seg.index];
     const mid = (k) => cum[k] + len[k] * 0.5;
+    // triangular weights at segment midpoints within the spread
+    const wt = (k) => Math.max(0.05, 1 - Math.abs(mid(k) - s0) / GILD_SPREAD) * len[k];
     // add `amt` (crack length) to segment k; returns what it could not hold
     const fill = (k, amt) => {
       const room = (1 - (g[k] || 0)) * len[k];
@@ -519,16 +521,13 @@ export function createSand(field, { cap = 26000, D = 256, state = null, bus = nu
       g[k] = 1;
       return amt - Math.max(0, room);
     };
-    // triangular weights at segment midpoints within the spread
     let wsum = 0;
     let lo = seg.index, hi = seg.index;
     while (lo > 0 && s0 - cum[lo] < GILD_SPREAD) lo--;
     while (hi < n - 1 && cum[hi + 1] - s0 < GILD_SPREAD) hi++;
-    for (let k = lo; k <= hi; k++) wsum += Math.max(0.05, 1 - Math.abs(mid(k) - s0) / GILD_SPREAD) * len[k];
+    for (let k = lo; k <= hi; k++) wsum += wt(k);
     let spill = wsum > 0 ? 0 : GILD_LEN;
-    if (wsum > 0) for (let k = lo; k <= hi; k++) {
-      spill += fill(k, (GILD_LEN * Math.max(0.05, 1 - Math.abs(mid(k) - s0) / GILD_SPREAD) * len[k]) / wsum);
-    }
+    for (let k = lo; k <= hi; k++) spill += fill(k, wsum > 0 ? (GILD_LEN * wt(k)) / wsum : 0);
     // the overflow runs along the seam, nearest segments first, in both directions
     for (let l = seg.index, r = seg.index + 1; spill > 1e-7 && (l >= 0 || r < n);) {
       const k = r >= n || (l >= 0 && s0 - mid(l) <= mid(r) - s0) ? l-- : r++;
