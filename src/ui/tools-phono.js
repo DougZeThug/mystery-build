@@ -121,7 +121,7 @@ export function createPhonograph(env) {
   const comps = [];
   for (let i = 0; i < TOP_N * 2; i++) comps.push({ mode: null, amp: 0 });
   const live = [];                      // the slice of comps in use this frame (reused)
-  const pub = { recording: false, playing: false, index: -1, progress: 0, amp: 0 };
+  const pub = { recording: false, playing: false, index: -1, progress: 0, amp: 0, x: 0, y: 0, pan: 0 };
 
   // ---- layout: where it stands, and which way the horn points ---------------------------------
   function place() {
@@ -206,6 +206,7 @@ export function createPhonograph(env) {
     lw = Math.round(Math.max(100, Pw * 1.0));
     Bw = Math.round(rc * 2 + 14); Rw = Bw + 6 + lw; Rh = Math.round(slotH * MAX_CYL + 10);
     place();
+    pub.x = x; pub.y = y; pub.pan = env.panOf(x);
     bakeAll(dpr);
   }
 

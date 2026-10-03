@@ -302,7 +302,7 @@ export function createTools(game) {
         break;
       case 'bow': bow.drop(); break;
       case 'jar': jar.drop(); break;
-      case 'cord': cord.release(); break;
+      case 'cord': cord.release(cancel ? NaN : p.x, p.y); break;
       case 'book':
         book.press(false);
         if (!cancel && !p.moved && book.hit(p.x, p.y, true)) { try { game.journal?.open?.(); } catch (err) { console.error(err); } }

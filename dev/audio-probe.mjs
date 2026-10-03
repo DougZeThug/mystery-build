@@ -21,7 +21,7 @@ for (const a of args) {
   const [name, w] = a.split(':');
   const windows = w ? w.split(',').map((x) => x.split('-').map(Number)) : null;
   const r = await page.evaluate(([n, ws]) => window.probe(n, ws), [name, windows]);
-  console.log(`== ${r.name} (${r.dur.toFixed(1)} s, nodes left ${r.nodes})`);
+  console.log(`== ${r.name} (${r.dur.toFixed(1)} s, nodes left ${r.nodes}${r.base !== undefined ? ` of base ${r.base}` : ''}) ${r.live ? JSON.stringify(r.live) : ''}`);
   for (const x of r.windows) {
     console.log(`  ${x.t[0]}-${x.t[1]} s  rms ${x.rms}  peak ${x.peak}`);
     console.log('    bands', Object.entries(x.bands).map(([f, v]) => `${f}:${v}`).join(' '));

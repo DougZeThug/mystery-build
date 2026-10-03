@@ -65,7 +65,7 @@ export function createPhono(E) {
     turn.connect(tDepth); tDepth.connect(tAm.gain);
     // wow and flutter (cents) into every horn oscillator's detune
     const wf = E.gain(1);
-    const wowG = E.gain(6), drift = E.osc('sine', 0.37), driftG = E.gain(5), flut = E.osc('sine', 9.3), flutG = E.gain(2.5);
+    const wowG = E.gain(5), drift = E.osc('sine', 0.37), driftG = E.gain(3.5), flut = E.osc('sine', 9.3), flutG = E.gain(2.5);
     turn.connect(wowG); wowG.connect(wf);
     drift.connect(driftG); driftG.connect(wf);
     flut.connect(flutG); flutG.connect(wf);

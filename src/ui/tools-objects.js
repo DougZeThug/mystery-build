@@ -681,9 +681,17 @@ export function createCord(env) {
     const cx = ax + s * (len + st.s) * t, cy = ay + c * (len + st.s) * t;
     return Math.hypot(px - cx, py - cy) < (touch ? 12 : 5);
   }
-  function pickUp(id) { heldBy = id; maxPull = 0; clicked = false; env.foundCord?.(); }
-  function release() {
+  // how far the hand itself has drawn the cord out (from where it took hold): a quick flick on a
+  // slow frame counts even if the drawn cord has not caught up with it yet
+  let gd0 = 0;
+  const handPull = (px, py) => Math.hypot(px - ax, Math.max(0, py - ay)) - gd0;
+  function pickUp(id, px, py) {
+    heldBy = id; maxPull = 0; clicked = false; env.foundCord?.();
+    gd0 = Number.isFinite(px) ? Math.hypot(px - ax, Math.max(0, py - ay)) : len + ph * 0.45;
+  }
+  function release(px, py) {
     heldBy = -1;
+    if (Number.isFinite(px)) maxPull = Math.max(maxPull, Math.min(maxS, handPull(px, py)));
     if (maxPull >= maxS * 0.5) toggle();
     st.vs = -st.s * 2;
   }
@@ -1185,7 +1193,9 @@ export function createCabinet(env) {
     } else if (p.kind === 'damper' || p.kind === 'pdamper') {
       t.ptr = -1;
       if (!t.moved) return;                         // a click on a damper leaves it be
-      const { u, v } = game.view.toPlate(t.x, t.y);
+      // dropped where the hand is (the disc may still be catching up on a slow frame)
+      const hx = Number.isFinite(x) ? x : t.x, hy = Number.isFinite(y) ? y : t.y;
+      const { u, v } = game.view.toPlate(hx, hy);
       if (!cancel && Math.abs(u) < 0.97 && Math.abs(v) < 0.97) place(t, u, v);
       else { t.state = 'return'; env.emit('sfx', { name: 'drop', pan: env.panOf(t.x), soft: true }); }
     }
