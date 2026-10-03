@@ -407,8 +407,9 @@ export function createTools(game) {
       const p = plist[i];
       if (p.kind !== 'press') continue;
       if (!p.hold) {
-        // one resting finger at a time: another still finger waits its turn
-        if (!holdPtr && now - p.st >= HOLD_S * 1000 && env.plateHit(p.x, p.y)) setHold(p);
+        // one resting finger at a time (another still finger waits its turn); a press on the edge
+        // band is waiting to become a stroke, not a rest
+        if (!holdPtr && !p.edge && now - p.st >= HOLD_S * 1000 && env.plateHit(p.x, p.y)) setHold(p);
       } else {
         toPlateInto(game.view, p.x, p.y, uvs);
         const nu = clamp(uvs.u, -0.98, 0.98), nv = clamp(uvs.v, -0.98, 0.98);
@@ -420,7 +421,7 @@ export function createTools(game) {
     }
     // fingertip visual
     let pend = 0;
-    if (!holdPtr) for (let i = 0; i < plist.length; i++) { const p = plist[i]; if (p.kind === 'press' && env.plateHit(p.x, p.y)) pend = Math.max(pend, smooth(0.25, HOLD_S, (now - p.st) / 1000)); }
+    if (!holdPtr) for (let i = 0; i < plist.length; i++) { const p = plist[i]; if (p.kind === 'press' && !p.edge && env.plateHit(p.x, p.y)) pend = Math.max(pend, smooth(0.25, HOLD_S, (now - p.st) / 1000)); }
     holdPend += (pend - holdPend) * Math.min(1, dt * 10);
     const hv = game.hold === holdObj ? 1 : 0;
     holdVis += (hv - holdVis) * Math.min(1, dt * (hv ? 3 : 5));

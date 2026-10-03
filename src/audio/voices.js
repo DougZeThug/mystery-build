@@ -264,7 +264,7 @@ export function createSingers(E) {
     trem.connect(tp);
     for (const o of os) tp.connect(o.detune);
     tp.connect(oc.detune);
-    const s = { id: sp.id, freqs, os, oc, gc, out, ts, pan, vo, vib, tg, tp, h, det, rate, depth, pos, nMain: freqs.length,
+    const s = { id: sp.id, freqs, os, oc, gc, out, ts, pan, vo, vib, tg, tp, det, rate, depth, pos, nMain: freqs.length,
       ph: h * TAU, bw: TAU / (5 + 4 * h2), stamp, idle: 0, last: {} };
     slots.push(s);
     return s;
