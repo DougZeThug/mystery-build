@@ -399,8 +399,8 @@ export function createJar(env) {
 // ===================================================================================================
 export function createBook(env) {
   const { game } = env;
-  let Bw = 100, Bh = 142, spr = null, rx = 0, ry = 0, ra = 0;
-  const st = { lift: 0, vlift: 0, press: 0, vpress: 0 };
+  let Bw = 100, Bh = 142, spr = null, rx = 0, ry = 0, ra = 0, slipH = 30;
+  const st = { lift: 0, vlift: 0, press: 0, vpress: 0, slip: 0, vslip: 0 };
   let hovering = false, pressed = false;
   const tmp = { x: 0, y: 0 };
 
@@ -508,6 +508,44 @@ export function createBook(env) {
       g.restore();
     });
     spr = { lit, dark: bakeTint(lit, '#0d0a08'), sh: bakeShadow(lit, Math.max(1.5, Bw * 0.02)), shSoft: bakeShadow(lit, Math.max(4, Bw * 0.08)) };
+    // a loose slip of paper tucked between the leaves: it shows while something new is written
+    // (origin = where it enters the book at the head; it extends up, -y, and well down inside)
+    const sw = Math.round(Bw * 0.24), sTop = Bh * 0.24, sIn = Bh * 0.36;
+    slipH = sTop;
+    const rs = seeded(1892);
+    const slip = bake(sw + 6, sTop + sIn + 6, sw / 2 + 3, sTop + 3, dpr, (g) => {
+      g.beginPath();
+      g.moveTo(-sw / 2, sIn);
+      g.lineTo(-sw / 2, -sTop + 3);
+      // a torn top edge
+      const n = 9;
+      for (let i = 0; i <= n; i++) g.lineTo(-sw / 2 + (sw * i) / n, -sTop + 1.2 + rs() * 2.6);
+      g.lineTo(sw / 2, sIn);
+      g.closePath();
+      const pg = g.createLinearGradient(-sw / 2, 0, sw / 2, 0);
+      pg.addColorStop(0, '#d9ccab'); pg.addColorStop(0.4, '#eee3c8'); pg.addColorStop(1, '#cdbf9d');
+      g.fillStyle = pg; g.fill();
+      g.save(); g.clip();
+      speckle(g, rs, -sw / 2, -sTop, sw, sTop + sIn, 60, '#8a6a40', 0.08, 0.25, 0.4, 1.2);
+      // faint ruling and a few words in graphite
+      g.strokeStyle = 'rgba(120,140,160,0.22)'; g.lineWidth = 0.5;
+      for (let yy = -sTop + 7; yy < 0; yy += 4.5) { g.beginPath(); g.moveTo(-sw / 2, yy); g.lineTo(sw / 2, yy); g.stroke(); }
+      g.strokeStyle = 'rgba(55,52,50,0.6)'; g.lineWidth = 0.6;
+      for (let yy = -sTop + 6.5, i = 0; yy < -2; yy += 4.5, i++) {
+        const x0 = -sw / 2 + 2 + rs() * 2, x1 = sw / 2 - 2 - rs() * sw * (i % 2 ? 0.45 : 0.15);
+        g.beginPath(); g.moveTo(x0, yy);
+        for (let xx = x0; xx < x1; xx += 2.2) g.lineTo(xx, yy - 0.4 + Math.sin(xx * 1.7 + i) * 0.7 + rs() * 0.3);
+        g.stroke();
+      }
+      // the light catches its top edge; the book's shadow on it lower down
+      const sh2 = g.createLinearGradient(0, -6, 0, 4);
+      sh2.addColorStop(0, 'rgba(0,0,0,0)'); sh2.addColorStop(1, 'rgba(30,18,8,0.45)');
+      g.fillStyle = sh2; g.fillRect(-sw / 2, -6, sw, sIn + 6);
+      g.restore();
+      g.strokeStyle = 'rgba(90,70,40,0.35)'; g.lineWidth = 0.5;
+      g.beginPath(); g.moveTo(-sw / 2, sIn); g.lineTo(-sw / 2, -sTop + 3); g.moveTo(sw / 2, -sTop + 3); g.lineTo(sw / 2, sIn); g.stroke();
+    });
+    spr.slip = slip; spr.slipDark = bakeTint(slip, '#0d0a08'); spr.slipSh = bakeShadow(slip, 1.5);
   }
 
   function hit(px, py, touch) {
@@ -516,9 +554,29 @@ export function createBook(env) {
     const lx = dx * c + dy * s, ly = -dx * s + dy * c;
     return Math.abs(lx) < Bw / 2 + pad && Math.abs(ly) < Bh / 2 + pad;
   }
+  const unread = () => { try { return (+game.journal?.unread || 0) > 0 && !game.journal?.isOpen; } catch { return false; } };
   function update(dt) {
     spring(st, 'lift', 'vlift', hovering ? 1 : 0, 12, dt);
     spring(st, 'press', 'vpress', pressed ? 1 : 0, 25, dt);
+    // the slip rises a little slowly (someone has just tucked it in) and is drawn back at once when read
+    const want = unread() ? 1 : 0;
+    spring(st, 'slip', 'vslip', want, want ? 3.2 : 9, dt);
+    if (st.slip < 0.002 && !want) st.slip = st.vslip = 0;
+  }
+  // the loose slip: sticking out of the head of the book, stirring as if in a draught
+  function drawSlip(ctx, lamp, alpha, f) {
+    const k = clamp01(st.slip);
+    if (k < 0.01 || !spr.slip) return;
+    const t = game.t || 0;
+    const stir = env.reduced ? 0 : 0.05 * Math.sin(t * 1.15) + 0.025 * Math.sin(t * 2.7 + 1.3) + 0.04 * Math.max(0, Math.sin(t * 0.37)) ** 6 * Math.sin(t * 9);
+    ctx.save();
+    ctx.translate(Bw * 0.2, -Bh / 2 + 2);
+    ctx.rotate(0.13 + stir);
+    ctx.translate(0, (1 - k) * slipH * 1.05);
+    // its shadow falls on the cover below
+    ctx.save(); ctx.translate(1.5, 2.5); blit(ctx, spr.slipSh, alpha * 0.4 * k * lamp.shadowAt(rx, ry)); ctx.restore();
+    blitLit(ctx, spr.slip, spr.slipDark, alpha * Math.min(1, k * 1.6), f * 1.05);
+    ctx.restore();
   }
   function draw(ctx, lamp, alpha) {
     if (!spr || alpha <= 0.002) return;
@@ -532,6 +590,12 @@ export function createBook(env) {
     ctx.restore();
     ctx.save(); ctx.translate(rx, ry); ctx.rotate(ra);
     const sc = 1 + 0.018 * st.lift - 0.012 * st.press; ctx.scale(sc, sc);
+    // the slip first: the cover hides the part of it tucked inside
+    if (st.slip > 0.01) {
+      ctx.save(); ctx.beginPath(); ctx.rect(-Bw, -Bh * 1.2, Bw * 2, Bh * 0.7 + 2); ctx.clip();
+      drawSlip(ctx, lamp, alpha, f);
+      ctx.restore();
+    }
     blitLit(ctx, spr.lit, spr.dark, alpha, f);
     ctx.restore();
   }

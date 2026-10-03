@@ -330,7 +330,11 @@ export function createTools(game) {
     const tg = e.target;
     if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.isContentEditable)) return;
     const k = (e.key || '').toLowerCase();
-    if (k === 'm') { const a = game.audio; if (a?.setMuted) a.setMuted(!a.muted); }
+    if (k === 'm') {
+      const a = game.audio;
+      if (a?.toggleMute) a.toggleMute();
+      else if (a?.setMuted) a.setMuted(!a.muted);
+    }
     else if (k === 'escape' && cabinet.userOpen && !game.journal?.isOpen) cabinet.toggle(false);
   }
 
