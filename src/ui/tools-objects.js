@@ -1,5 +1,5 @@
 // The things around the plate: the sand jar, the field notebook, the pull-cord, the cabinet drawer
-// (felt-lined tray of dampers and tuning forks) and the phonograph's closed case.
+// (felt-lined tray of dampers and tuning forks). The phonograph lives in tools-phono.js.
 // Each object: layout() on resize (bakes its sprites), update(dt, pointer?), draw(ctx, lamp, alpha),
 // hit(x, y, touch) for the pointer router in tools.js.
 import * as Modes from '../sim/modes.js';
@@ -1440,78 +1440,5 @@ export function createCabinet(env) {
     get open() { return st.open; },
     get nForks() { return nForks; },
     dampers, forks, drive, strike,
-  };
-}
-
-// ===================================================================================================
-// PHONOGRAPH — for now only its closed case: oak, brass corners, a crank folded against its side.
-// ===================================================================================================
-export function createPhonograph(env) {
-  const { game } = env;
-  let x = 0, y = 0, Pw = 90, Ph = 64, spr = null;
-  function layout() {
-    const v = game.view, S = v.plate.size, dpr = v.dpr || 1;
-    const an = v.anchors?.phonograph || { x: v.plate.x + S * 1.34, y: v.plate.y + S * 0.22 };
-    Pw = Math.round(clamp(S * 0.2, 56, 120)); Ph = Math.round(Pw * 0.72);
-    x = clamp(an.x, Pw * 0.6, v.vw - Pw * 0.6); y = an.y;
-    // keep clear of the bow where it rests (it lies diagonally through this corner in landscape)
-    const r = env.bowRest?.();
-    if (r) {
-      const hits = (px, py) => {
-        for (let i = 0; i <= 20; i++) {
-          const t = i / 20, bx = r.x + Math.cos(r.a) * r.L * t, by = r.y + Math.sin(r.a) * r.L * t;
-          if (Math.abs(bx - px) < Pw * 0.5 + 14 && Math.abs(by - py) < Ph * 0.5 + 14) return true;
-        }
-        return false;
-      };
-      if (hits(x, y)) {
-        let moved = false;
-        for (let dx = 8; dx < v.vw && !moved; dx += 8) {
-          const nx = x + dx;
-          if (nx > v.vw - Pw * 0.55) break;
-          if (!hits(nx, y)) { x = nx; moved = true; }
-        }
-        if (!moved && v.mode === 'landscape') { x = v.plate.x - S * 0.34; y = v.plate.y + S * 0.5; }
-      }
-    }
-    const rnd = seeded(1877);
-    const lit = bake(Pw * 1.4, Ph * 1.5, Pw * 0.7, Ph * 0.75, dpr, (g) => {
-      const x0 = -Pw / 2, y0 = -Ph / 2, lidH = Ph * 0.62;
-      // front face (darker, it faces away from the lamp)
-      woodGrain(g, rnd, x0, y0 + lidH, Pw, Ph - lidH, '#4a2f17', '#24150a', '#6e4a28', true, 16);
-      g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(x0, y0 + lidH, Pw, Ph - lidH);
-      // lid (top face)
-      woodGrain(g, rnd, x0, y0, Pw, lidH, '#7a5330', '#3e2814', '#a8784a', true, 30);
-      g.fillStyle = 'rgba(255,220,170,0.14)'; g.fillRect(x0, y0, Pw, 1.2);
-      g.strokeStyle = 'rgba(0,0,0,0.4)'; g.lineWidth = 0.8; g.strokeRect(x0 + 5.5, y0 + 5.5, Pw - 11, lidH - 11);
-      g.strokeStyle = 'rgba(255,220,170,0.12)'; g.strokeRect(x0 + 6.3, y0 + 6.3, Pw - 11, lidH - 11);
-      g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(x0, y0 + lidH - 1, Pw, 1.5);
-      // brass corners
-      const c = Math.max(5, Pw * 0.08);
-      for (const [cx, cy, sx, sy] of [[x0, y0, 1, 1], [x0 + Pw, y0, -1, 1], [x0, y0 + Ph, 1, -1], [x0 + Pw, y0 + Ph, -1, -1]]) {
-        g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + sx * c, cy); g.lineTo(cx, cy + sy * c); g.closePath();
-        g.fillStyle = brassGrad(g, cx, cy, cx + sx * c, cy + sy * c); g.fill();
-      }
-      // latch and handle
-      g.beginPath(); roundRectPath(g, -Pw * 0.06, y0 + lidH - 3, Pw * 0.12, 7, 1.5); g.fillStyle = brassGrad(g, -Pw * 0.06, 0, Pw * 0.06, 0); g.fill();
-      g.strokeStyle = 'rgba(30,18,8,0.8)'; g.lineWidth = 2.4; g.lineCap = 'round';
-      g.beginPath(); g.moveTo(-Pw * 0.16, y0 + lidH * 0.42); g.quadraticCurveTo(0, y0 + lidH * 0.28, Pw * 0.16, y0 + lidH * 0.42); g.stroke();
-      g.strokeStyle = '#5a3a22'; g.lineWidth = 1.8; g.stroke();
-      // the crank, folded along the right side
-      g.strokeStyle = '#2c2d2e'; g.lineWidth = 2; g.beginPath(); g.moveTo(x0 + Pw + 1, y0 + Ph * 0.7); g.lineTo(x0 + Pw + 3, y0 + Ph * 0.3); g.stroke();
-      g.beginPath(); g.arc(x0 + Pw + 3, y0 + Ph * 0.27, 2.2, 0, TAU); g.fillStyle = '#4a3020'; g.fill();
-    });
-    spr = { lit, dark: bakeTint(lit, '#0d0a08'), sh: bakeShadow(lit, Math.max(2, Pw * 0.04)) };
-  }
-  return {
-    layout, update() {},
-    draw(ctx, lamp, alpha) {
-      if (!spr || alpha <= 0.002) return;
-      const f = lamp.at(x, y);
-      const sa = lamp.shadowAt(x, y) * alpha * 0.7;
-      ctx.save(); ctx.globalAlpha = sa * 0.6; ctx.fillStyle = '#000'; ctx.fillRect(x - Pw / 2 + 2, y + Ph / 2 - 2, Pw - 4, 4); ctx.restore();
-      uprightShadow(ctx, spr.sh, lamp, x, y + Ph / 2, Ph / 2, Ph * 0.55, sa * 0.6);
-      ctx.save(); ctx.translate(x, y); blitLit(ctx, spr.lit, spr.dark, alpha, f); ctx.restore();
-    },
   };
 }

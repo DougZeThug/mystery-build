@@ -6,7 +6,8 @@
 import { MODES, evalMode } from '../sim/modes.js';
 import { clamp, smooth, createLamp, loadFonts, bake, bakeShadow, blit, toPlateInto, toScreenInto } from './tools-art.js';
 import { createBow } from './tools-bow.js';
-import { createJar, createBook, createCord, createCabinet, createPhonograph } from './tools-objects.js';
+import { createJar, createBook, createCord, createCabinet } from './tools-objects.js';
+import { createPhonograph } from './tools-phono.js';
 import { createMoth } from './tools-moth.js';
 
 const TAP_MS = 220, TAP_PX = 6;          // a click on the plate
@@ -236,6 +237,7 @@ export function createTools(game) {
     if (isOn('jar') && jar.heldBy < 0 && jar.hit(x, y, touch)) { jar.pickUp(p.id, x, y); p.kind = 'jar'; return true; }
     if (cord.hit(x, y, touch) && cord.heldBy < 0) { cord.pickUp(p.id, x, y); p.kind = 'cord'; return true; }
     if (bow.heldBy < 0 && bow.hit(x, y, touch)) { bow.pickUp(p.id, x, y, false); p.kind = 'bow'; return true; }
+    if (isOn('phonograph')) { const ph = phono.hit(x, y, touch); if (ph) { p.kind = 'phono'; p.target = ph; phono.press(ph); return true; } }
     if (isOn('journal') && book.hit(x, y, touch)) { p.kind = 'book'; book.press(true); return true; }
     if (isOn('drawer') && cabinet.hitFront(x, y, touch)) { p.kind = 'front'; return true; }
     if (bow.heldBy < 0 && edgeNear(x, y, touch ? SNAP_PX * 1.4 : SNAP_PX)) { bow.pickUp(p.id, x, y, true); p.kind = 'bow'; return true; }
@@ -274,6 +276,7 @@ export function createTools(game) {
         break;
       case 'jar': case 'cord': case 'bow': break;     // they read the pointer in update
       case 'book': if (p.moved) { book.press(false); p.kind = 'none'; } break;
+      case 'phono': if (p.moved) { phono.release(); p.kind = 'none'; } break;
       case 'front': break;
       default: cabinet.move(p, x, y); break;
     }
@@ -301,6 +304,10 @@ export function createTools(game) {
       case 'front':
         if (!cancel && !p.moved && cabinet.hitFront(p.x, p.y, true)) cabinet.toggle();
         break;
+      case 'phono':
+        if (!cancel && !p.moved && phono.hit(p.x, p.y, true) === p.target) phono.click(p.target);
+        else phono.release();
+        break;
       case 'none': break;
       default: cabinet.up(p, p.x, p.y, cancel, dur); break;
     }
@@ -311,7 +318,7 @@ export function createTools(game) {
   function cursor(x, y) {
     for (let i = 0; i < plist.length; i++) {
       const k = plist[i].kind;
-      if (k && k !== 'press' && k !== 'none' && k !== 'book' && k !== 'front') return 'grabbing';
+      if (k && k !== 'press' && k !== 'none' && k !== 'book' && k !== 'front' && k !== 'phono') return 'grabbing';
     }
     if (!game.view) return 'default';
     if (cabinet.userOpen) { const c = cabinet.cursor(x, y); if (c) return c; }
@@ -319,6 +326,7 @@ export function createTools(game) {
     if (isOn('jar') && jar.hit(x, y, false)) return 'grab';
     if (cord.hit(x, y, false)) return 'grab';
     if (bow.hit(x, y, false)) return 'grab';
+    if (isOn('phonograph') && phono.hit(x, y, false)) return 'pointer';
     if (isOn('journal') && book.hit(x, y, false)) return 'pointer';
     if (isOn('drawer') && cabinet.hitFront(x, y, false)) return 'pointer';
     if (edgeNear(x, y, SNAP_PX)) return 'grab';
@@ -531,6 +539,8 @@ export function createTools(game) {
   const tools = {
     bow: bowPub,
     get moth() { return moth.pub; },
+    get phono() { return phono.pub; },
+    phonograph: { record: () => phono.record(), stop: () => phono.stop(), play: (i) => phono.play(i), get mode() { return phono.mode; } },
     update, render, pointerDown, pointerMove, pointerUp, cursor, key, reveal,
     revealed: (w) => !!want[w],
     get trayOpen() { return cabinet.trayOpen; },

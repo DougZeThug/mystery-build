@@ -149,11 +149,13 @@ test('first births are quick: a steady figure at amp .45 quickens within 8-14 s;
     let t = 0;
     const times = [];
     const off = bus.on('mote:birth', () => { g.state.stats.births++; times.push(t); });   // as progress.js does
-    while (t < 24) { step(g, 0.1, '2.5-', amp); t += 0.1; }
+    while (t < 30) { step(g, 0.1, '2.5-', amp); t += 0.1; }
     off(); ev.off(); g.life.destroy();
-    assert.ok(times.length >= 3, `amp ${amp}: only ${times.length} births in 24 s`);
+    assert.ok(times.length >= 4, `amp ${amp}: only ${times.length} births in 30 s`);
     assert.ok(times[0] >= 7 && times[0] <= 14, `amp ${amp}: first birth at ${times[0].toFixed(1)} s`);
     assert.ok(times[2] <= 22, `amp ${amp}: third birth at ${times[2].toFixed(1)} s`);
+    // after the third, a familiar kind quickens at its ordinary pace (about 3.4 s apart at .8)
+    for (let i = 3; i < times.length; i++) assert.ok(times[i] - times[i - 1] >= 2.9, `amp ${amp}: births ${i} and ${i + 1} only ${(times[i] - times[i - 1]).toFixed(1)} s apart`);
   }
   // an experienced plate (three births already) keeps the old, slower gestation
   const st = newState(); st.stats.births = 3;
