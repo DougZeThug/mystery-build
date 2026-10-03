@@ -8,7 +8,7 @@
 //   friction strong; on a silent plate overwhelming, so grains freeze where they lie
 // A few percent of the finest dust (Faraday's observation) gathers at the antinodes instead and
 // trembles there when the plate is loud. Gold is heavier: slower, calmer, and it lodges in cracks.
-// On a silent plate an optional, inaudible "dream" field (setDream) can move the sand very slowly.
+// On a hushed plate an optional, inaudible "dream" field (setDream) can move the sand very slowly.
 // Hot loop: typed arrays only, no allocation; resting grains are stepped every other frame.
 import { nearestSegment, createField } from './field.js';
 
@@ -34,6 +34,8 @@ export const SAND_TUNING = Object.freeze({
   SORT_EVERY: 1.5,    // re-order grains by cell this often (s) for memory locality; 0 = never
   SETTLE_V: 0.02,     // grains slower than this are stepped at half rate (2·dt); 0 = off
   DREAM_RATE: 0.3,    // drift of a dreaming plate relative to a singing one (with heavy friction)
+  DREAM_HUSH: 0.08,   // a dreaming plate ignores a real field quieter than this (the sleepers' whisper,
+                      // ≤ 0.054 however many sing); a bow, fork, phonograph or tap wakes it
   LINE_W: 0.022,      // ridge body: grains rest where |f| ≲ LINE_W·A beside the node
 });
 
@@ -54,7 +56,7 @@ const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a
 export function createSand(field, { cap = 26000, D = 256, state = null, bus = null, seed = 1234567, tuning = null } = {}) {
   const T = Object.assign({}, SAND_TUNING, tuning || {});
   const { A_SLEEP, DRIVE, J_ANTI, J_BASE, PRESS, GAMMA, GAMMA_STILL, VMAX, GOLD_MOB, GOLD_KICK, DANCER, EDGE_HOLD,
-    DRAIN_RATE, DRAIN_MAX, LODGE_D, GILD_LEN, GILD_SPREAD, SORT_EVERY, SETTLE_V, DREAM_RATE, LINE_W } = T;
+    DRAIN_RATE, DRAIN_MAX, LODGE_D, GILD_LEN, GILD_SPREAD, SORT_EVERY, SETTLE_V, DREAM_RATE, DREAM_HUSH, LINE_W } = T;
   cap = Math.max(1, Math.min(200000, Math.round(finite(cap, 26000))));
   D = Math.max(16, Math.min(1024, Math.round(finite(D, 256))));
   const DD = D * D;
@@ -86,7 +88,7 @@ export function createSand(field, { cap = 26000, D = 256, state = null, bus = nu
   const sortKey = new Uint16Array(cap), sortIdx = new Uint32Array(cap), sortCnt = new Uint32Array(SORT_S * SORT_S + 1);
   const scratchF = new Float32Array(cap), scratchB = new Uint8Array(cap);
   let sortClock = 0, frame = 0, drainCarry = 0;
-  const dream = { field: null, on: false, strength: 1 };
+  const dream = { field: null, on: false, strength: 1, now: false, time: 0 };
 
   let dirty = true;          // grain set changed since grids were built
   let asleep = false;        // nothing is moving: update can skip the grain loop
@@ -121,19 +123,23 @@ export function createSand(field, { cap = 26000, D = 256, state = null, bus = nu
 
     clear() { sand.n = 0; sand.goldCount = 0; dirty = true; rebuildGrids(); },
 
-    // The plate dreams: while the plate itself is silent, sand very slowly drifts into the figure of
-    // `comps` ([{mode, amp}], e.g. extinct species' modes). Inaudible and invisible to the field;
-    // a strength of 1 forms a figure in roughly a minute. null / [] wakes the plate from its dream.
+    // The plate dreams: while the plate itself is hushed (quieter than DREAM_HUSH: silent, or only the
+    // sleepers' whisper), sand very slowly drifts into the figure of `comps` ([{mode, amp}], e.g. extinct
+    // species' modes). Inaudible and invisible to the field; a strength of 1 forms a figure in roughly
+    // a minute. null / [] wakes the plate from its dream.
     setDream(comps, strength = 1) {
       const list = Array.isArray(comps) ? comps.filter((c) => c && c.mode && +c.amp > 0) : [];
-      if (!list.length) { dream.on = false; dream.field?.setSource('dream', []); return; }
+      if (!list.length) { dream.on = false; dream.now = false; dream.time = 0; dream.field?.setSource('dream', []); return; }
       if (!dream.field) dream.field = createField({ G: 96 });
       dream.field.setSource('dream', list.map((c) => ({ mode: c.mode, amp: Math.min(1.2, +c.amp) })));
       dream.strength = Math.max(0, Math.min(4, finite(+strength, 1)));
       dream.on = true;
       asleep = false;
     },
-    get dreaming() { return dream.on; },
+    // true while the dream is what moves the sand (set, the real plate hushed, grains moving)
+    get dreaming() { return dream.on && dream.now; },
+    // seconds the dream has actually moved the sand since it was set (0 once it ends)
+    get dreamTime() { return dream.on ? dream.time : 0; },
 
     // initial dusting: uniform, gently uneven (low-frequency noise) with a few small clumps
     seedScatter(count) {
@@ -226,16 +232,18 @@ export function createSand(field, { cap = 26000, D = 256, state = null, bus = nu
       let A = +field.total;
       A = A > 0 ? (A < 2 ? A : 2) : 0;
       const vib = A > A_SLEEP;
-      // dreaming: on a silent plate, an optional ghost field (setDream) moves the sand very slowly
+      // dreaming: while the real plate is hushed (silent, or the sleepers' whisper), an optional ghost
+      // field (setDream) moves the sand very slowly instead
       let dreaming = false;
-      if (!vib && dream.field && dream.on) { dream.field.update(dt); dreaming = dream.field.total > A_SLEEP; }
+      if (dream.field && dream.on) { dream.field.update(dt); dreaming = A < DREAM_HUSH && dream.field.total > A_SLEEP; }
+      dream.now = dreaming;
       const active = vib || dreaming;
       if (!active && asleep) { if (dirty) rebuildGrids(); return; }
 
       const src = dreaming ? dream.field : field;
       const G = src.G, G4 = G * 4, pack = src.pack;
       const Ad = dreaming ? Math.min(2, src.total) : A;
-      const fluid = smooth(A_SLEEP, 0.14, A);
+      const fluid = dreaming ? 0 : smooth(A_SLEEP, 0.14, A);   // a dream moves the sand on a still plate
       const kEff = Math.max(2, finite(src.kEff, 20));
       const drive = active ? ((DRIVE * dt) / (kEff * Math.max(Ad, 0.15))) * (dreaming ? DREAM_RATE * dream.strength : 1) : 0;
       const sq = Math.sqrt(dt) * (dreaming ? 0.06 : 1);
@@ -254,6 +262,7 @@ export function createSand(field, { cap = 26000, D = 256, state = null, bus = nu
 
       const cracks = state?.plate?.cracks;
       const crackIdx = field.crackIdx, crackNear = field.crackNear;
+      const FG = field.G, halfF = 0.5 * FG;    // crack grids live on the real field's grid (not a dream's)
       let unhealed = 0, unhealedMain = 0;
       if (cracks && crackIdx) for (let c = 0; c < cracks.length; c++) {
         const cr = cracks[c];
@@ -336,9 +345,9 @@ export function createSand(field, { cap = 26000, D = 256, state = null, bus = nu
         x[i] = px; y[i] = py; vx[i] = ux; vy[i] = uy;
 
         if (doCracks) {
-          let ci = ((px + 1) * halfG) | 0, cj = ((py + 1) * halfG) | 0;
-          if (ci > G - 1) ci = G - 1; if (cj > G - 1) cj = G - 1;
-          const c = cj * G + ci;
+          let ci = ((px + 1) * halfF) | 0, cj = ((py + 1) * halfF) | 0;
+          if (ci > FG - 1) ci = FG - 1; if (cj > FG - 1) cj = FG - 1;
+          const c = cj * FG + ci;
           if (kind[i] === 1) {
             const idx = crackIdx[c];
             if (idx >= 0 && lodge(i, idx, px, py)) continue;
@@ -350,6 +359,7 @@ export function createSand(field, { cap = 26000, D = 256, state = null, bus = nu
       }
       rs = s;
       drainCarry = doCracks ? Math.min(1, drainBudget) : 0;   // fractional budget carries over
+      if (dreaming && changed) dream.time += dt;
       asleep = !active && maxSp2 < 1e-8;
       if (active && SORT_EVERY > 0 && (sortClock += dt) > SORT_EVERY) { sortClock = 0; spatialSort(); }
       if (changed) dirty = true;
