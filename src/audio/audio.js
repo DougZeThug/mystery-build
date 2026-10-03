@@ -11,7 +11,7 @@ const KEEPER_ID = 'keeper';
 
 const NM = MODES.length;
 const FLOOR_INDEX = MODES.findIndex((m) => m.special);
-const MUTE_KEY = 'stillpoint.muted';
+const OLD_MUTE_KEY = 'stillpoint.muted';   // mute used to outlive the visit; it is per visit now
 const PREP_RATE = 48000;          // buffers are prepared at this rate before the context exists
 const SEED = 7;
 const clamp01 = (x) => (x > 0 ? (x < 1 ? x : 1) : 0);
@@ -43,7 +43,8 @@ export function createAudio(game) {
   const ksCache = new Map();
   const offs = [];
   let ctx = null, E = null, started = false;
-  let muted = readMuted();
+  let muted = false;                                 // a toggle for this visit only (never saved)
+  forgetOldMute();
   let choirRoot = 0, choirRootAuto = 0;
   let bowFallback = null, bowFallbackT = 0;
   let hideTimer = 0, irSet = false;
@@ -61,7 +62,6 @@ export function createAudio(game) {
     get snapshot() { return snap; },
     setMuted(m) {
       muted = !!m;
-      writeMuted(muted);
       if (E) E.setMuted(muted);
     },
     toggleMute() { audio.setMuted(!muted); return muted; },
@@ -96,7 +96,9 @@ export function createAudio(game) {
     const AC = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
     if (!AC) return;                                 // no WebAudio: the room is silent, nothing breaks
     started = true;
-    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* Safari only */ }
+    // 'ambient': mix with whatever else is playing and respect the ring/silent switch (iOS);
+    // 'playback' would pause the player's music on the first touch and sound through silent mode
+    try { if (navigator.audioSession) navigator.audioSession.type = 'ambient'; } catch { /* Safari only */ }
     try { ctx = new AC({ latencyHint: 'interactive' }); } catch { try { ctx = new AC(); } catch { ctx = null; } }
     if (!ctx) return;
     unlock();
@@ -117,6 +119,11 @@ export function createAudio(game) {
     const vis = () => visibility();
     document.addEventListener('visibilitychange', vis);
     offs.push(() => document.removeEventListener('visibilitychange', vis));
+    // the hidden-tab fade comes back whenever the context is running again in a visible tab, by
+    // whichever path it got there (the return itself, or a later gesture's unlock)
+    const state = () => restore();
+    ctx.addEventListener('statechange', state);
+    offs.push(() => ctx && ctx.removeEventListener('statechange', state));
   }
 
   // One buffer per idle slot, starting shortly after boot, so the first click costs almost nothing
@@ -158,7 +165,7 @@ export function createAudio(game) {
   function unlock() {
     if (!ctx || ctx.state === 'closed' || document.visibilityState === 'hidden') return;
     if (ctx.state === 'running' && primed) return;
-    try { const p = ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch { /* not allowed yet */ }
+    resume();
     try {
       const b = ctx.createBuffer(1, 1, ctx.sampleRate);
       const s = ctx.createBufferSource();
@@ -168,17 +175,33 @@ export function createAudio(game) {
     primed = true;
   }
 
-  // hidden tab: fade out and suspend (no drones playing behind your back); back: resume, fade in
+  // hidden tab: fade out and suspend (no drones playing behind your back); back: resume, fade in.
+  // The fade is restored from the context's state (restore, also on 'statechange'), not from one
+  // resume() promise: a browser may refuse that resume and only allow a later gesture's.
+  let hiddenFade = false;
   function visibility() {
     if (!ctx || !E) return;
     clearTimeout(hideTimer);
     if (document.visibilityState === 'hidden') {
+      hiddenFade = true;
       E.fadeTo(0, 0.06);
-      hideTimer = setTimeout(() => { if (document.visibilityState === 'hidden') ctx.suspend().catch(() => {}); }, 300);
+      hideTimer = setTimeout(() => {
+        if (document.visibilityState !== 'hidden') return;
+        // back already while the suspend was on its way: wake up again
+        ctx.suspend().then(() => { if (document.visibilityState === 'visible') resume(); }, () => {});
+      }, 300);
     } else {
-      const p = ctx.state === 'running' ? Promise.resolve() : ctx.resume();
-      p.then(() => E && E.fadeTo(1, 0.35)).catch(() => {});
+      if (ctx.state !== 'running') resume();
+      restore();
     }
+  }
+  function resume() {
+    try { const p = ctx.resume(); if (p && p.catch) p.catch(() => {}); } catch { /* not allowed yet */ }
+  }
+  function restore() {
+    if (!hiddenFade || !E || !ctx || ctx.state !== 'running' || document.visibilityState !== 'visible') return;
+    hiddenFade = false;
+    E.fadeTo(1, 0.35);
   }
 
   // --- the snapshot ----------------------------------------------------------------------------
@@ -437,5 +460,5 @@ function aliasOf(name, p) {
   return ALIAS[name] || name;
 }
 
-function readMuted() { try { return localStorage.getItem(MUTE_KEY) === '1'; } catch { return false; } }
-function writeMuted(m) { try { localStorage.setItem(MUTE_KEY, m ? '1' : '0'); } catch { /* private mode */ } }
+// an earlier build saved mute across visits (one stray key press silenced every later visit)
+function forgetOldMute() { try { localStorage.removeItem(OLD_MUTE_KEY); } catch { /* private mode */ } }

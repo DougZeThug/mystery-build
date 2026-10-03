@@ -199,78 +199,87 @@ const BOW_TONE = 3.2, BOW_ROSIN = 0.2;
 // ---------------------------------------------------------------------------------------------
 // The singers: one voice per living species (max 10, most numerous first). Each component of the
 // species is a glassy oscillator (hybrids sing chords), a detuned twin thickens a crowd, a slow
-// vibrato and breathing keep it alive. Panned to where the species gathers. In the dark they sink
-// an octave, soften and slow; in a choir they swell; around a resting finger they purr. When many
-// cling to the bronze against a violent plate (life state 'cling'), the clinging kinds tremble: a
-// fast, faint tremolo and a shiver of pitch (one shared LFO, depth by how many of each kind cling).
+// vibrato of its own and breathing keep it alive. Panned to where the species gathers. Kinds often
+// share a pitch (the ± twins; k and 2k fold onto one octave), so every voice is given a fixed
+// detune of its own, drawn from its name and kept clear of the pitches already sounding, and a
+// vibrato rate apart from the kinds it coincides with: coinciding kinds beat slowly instead of
+// locking into whatever sum or cancellation their starting phases happened to give. In the dark
+// they sink an octave, soften and slow; in a choir they swell; around a resting finger they purr.
+// When many cling to the bronze against a violent plate (life state 'cling'), the clinging kinds
+// tremble: a fast, faint tremolo and a shiver of pitch (one shared LFO, depth by how many of each
+// kind cling). The tremolo sits on its own stage after the voice's gain, so a voice that fades
+// out takes its trembling with it.
 
 const SING_MAX = 10;
-const VIB = [[4.3, 9], [5.6, 12]];      // two shared vibratos (Hz, cents); each species takes one
-const VIB_KEYS = VIB.map((_, i) => ['r' + i, 'd' + i]);
+const DETUNE = { lo: -7, hi: 7, step: 0.25, min: 2.5 };         // cents: each voice's fixed detune
+const VIB_RATE = { lo: 4.2, hi: 5.9, step: 0.05, min: 0.35 };   // Hz: each voice's vibrato
+const NEAR = 25;                  // cents: pitches closer than this beat against each other
+const centsOf = (f) => 1200 * Math.log2(f);
 
 export function createSingers(E) {
   const slots = [];
   const pick = new Int16Array(256);
   let stamp = 0;
-  let bank = null, bankIdle = 0, trem = null;
-  const bl = {};
+  let trem = null, tremIdle = 0;
 
-  function wakeBank(at) {
-    bank = VIB.map(([rate, depth]) => {
-      const o = E.osc('sine', rate), g = E.gain(depth);
-      o.connect(g); o.start(at);
-      return { o, g, rate, depth };
-    });
-    trem = E.osc('sine', TREM_HZ);
-    trem.start(at);
-    for (const k in bl) delete bl[k];
-  }
-  function sleepBank(at) {
-    const nodes = [trem];
-    E.stop(trem, at);
-    for (const v of bank) { E.stop(v.o, at); nodes.push(v.o, v.g); }
-    bank[0].o.onended = () => E.free(nodes);
-    bank = null; trem = null;
-  }
   function find(id) {
     for (let i = 0; i < slots.length; i++) if (slots[i].id === id) return slots[i];
     return null;
   }
   function make(sp, at) {
-    if (!bank) wakeBank(at);
+    if (!trem) { trem = E.osc('sine', TREM_HZ); trem.start(at); tremIdle = 0; }
     const freqs = voiceChord(sp.ks);
     if (!freqs.length) freqs.push(550);
-    const h = hash01(sp.id), h2 = hash01(sp.id + '~');
-    const vib = bank[h < 0.5 ? 0 : 1].g;
-    const out = E.gain(0), pan = E.pan(0);
-    out.connect(pan); pan.connect(E.bus.singer);
+    const h = hash01(sp.id), h2 = hash01(sp.id + '~'), h3 = hash01(sp.id + '^');
+    // where its pitches sit (cents): the components, and the crowd twin a little above the lowest
+    const twin = 6 + 6 * h2;
+    const pos = freqs.map(centsOf);
+    pos.push(pos[0] + twin);
+    // the pitches already sounding, and the vibrato rates of the voices it would beat against
+    const taken = [], rates = [];
+    for (const o of slots) {
+      let near = false;
+      for (const c of o.pos) {
+        taken.push(c);
+        for (const p of pos) if (Math.abs(c - p) < NEAR) near = true;
+      }
+      if (near) rates.push(o.rate);
+    }
+    const det = spreadOffset(pos, taken, (h - 0.5) * 12, DETUNE);
+    for (let i = 0; i < pos.length; i++) pos[i] += det;
+    const rate = spreadOffset([0], rates, VIB_RATE.lo + (VIB_RATE.hi - VIB_RATE.lo) * h3, VIB_RATE);
+    // voice -> gain (level) -> tremolo stage -> pan
+    const out = E.gain(0), ts = E.gain(1), pan = E.pan(0);
+    out.connect(ts); ts.connect(pan); pan.connect(E.bus.singer);
+    const depth = 9 + 3 * h2;                                   // vibrato, cents
+    const vo = E.osc('sine', rate), vib = E.gain(depth);
+    vo.connect(vib); vo.start(at);
     const os = [];
     for (let i = 0; i < freqs.length; i++) {
       const w = sp.aurata ? (i ? E.waves.bellSoft : E.waves.bell) : (i ? E.waves.glassSoft : E.waves.glass);
-      const o = E.osc(w, freqs[i]);
+      const o = E.osc(w, freqs[i], det);
       o.connect(out); vib.connect(o.detune); o.start(at);
       os.push(o);
     }
     // a slightly detuned twin of the lowest voice: a crowd of the same kind shimmers
-    const oc = E.osc(E.waves.glass, freqs[0], 6 + 6 * h2), gc = E.gain(0);
+    const oc = E.osc(E.waves.glass, freqs[0], det + twin), gc = E.gain(0);
     oc.connect(gc); gc.connect(out); vib.connect(oc.detune); oc.start(at);
-    // trembling (clinging): tremolo onto the voice's gain, a shiver onto every pitch; silent at 0
+    // trembling (clinging): tremolo onto the stage after the gain, a shiver onto every pitch; silent at 0
     const tg = E.gain(0), tp = E.gain(0);
-    trem.connect(tg); tg.connect(out.gain);
+    trem.connect(tg); tg.connect(ts.gain);
     trem.connect(tp);
     for (const o of os) tp.connect(o.detune);
     tp.connect(oc.detune);
-    const s = { id: sp.id, freqs, os, oc, gc, out, pan, vib, tg, tp, h, h2, ph: h * TAU,
-      bw: TAU / (5 + 4 * h2), stamp, idle: 0, last: {} };
+    const s = { id: sp.id, freqs, os, oc, gc, out, ts, pan, vo, vib, tg, tp, h, det, rate, depth, pos,
+      ph: h * TAU, bw: TAU / (5 + 4 * h2), stamp, idle: 0, last: {} };
     slots.push(s);
     return s;
   }
   function kill(s, at) {
-    const nodes = [...s.os, s.oc, s.gc, s.out, s.pan, s.tg, s.tp];
+    const nodes = [...s.os, s.oc, s.gc, s.out, s.ts, s.pan, s.vo, s.vib, s.tg, s.tp];
     if (trem) { try { trem.disconnect(s.tg); trem.disconnect(s.tp); } catch { /* gone */ } }
-    for (const o of s.os) { E.stop(o, at); try { s.vib.disconnect(o.detune); } catch { /* gone */ } }
-    E.stop(s.oc, at);
-    try { s.vib.disconnect(s.oc.detune); } catch { /* gone */ }
+    for (const o of s.os) E.stop(o, at);
+    E.stop(s.oc, at); E.stop(s.vo, at);
     s.oc.onended = () => E.free(nodes);
   }
 
@@ -308,12 +317,16 @@ export function createSingers(E) {
         glide(s.last, 'g', s.out.gain, g, at, 0.12);
         // clinging: depth by the share of this kind that clings, once many cling at all
         const w = many > 0 && sp.cling > 0 ? many * Math.min(1, sp.cling / Math.max(1, sp.count)) : 0;
-        glide(s.last, 'tg', s.tg.gain, g * TREM_DEPTH * w, at, w > 0 ? 0.15 : 0.4);
+        glide(s.last, 'tg', s.tg.gain, TREM_DEPTH * w, at, w > 0 ? 0.15 : 0.4);
         glide(s.last, 'tp', s.tp.gain, TREM_CENTS * w, at, w > 0 ? 0.15 : 0.4);
         glide(s.last, 'c', s.gc.gain, Math.min(0.55, 0.18 * (c - 1)), at, 0.4);
         glide(s.last, 'p', s.pan.pan, Math.max(-0.75, Math.min(0.75, (sp.cu || 0) * 0.65)), at, 0.3);
-        // cracks pull each species a little off true (its own way), so they beat against the plate
-        const fm = mul * (1 + det * (s.h - 0.5) * 1.2);
+        // its vibrato: slower and shallower in the dark, wider in a choir
+        glide(s.last, 'vr', s.vo.frequency, s.rate * (1 - 0.5 * dark), at, 0.5);
+        glide(s.last, 'vd', s.vib.gain, s.depth * (1 - 0.4 * dark) + 4 * choir, at, 0.5);
+        // cracks pull each species further off true along its own detune, so the kinds spread apart
+        // (never across each other) and beat against the plate
+        const fm = mul * (1 + det * (s.det / DETUNE.hi) * 0.6);
         if (s.last.m === undefined || Math.abs(s.last.m - fm) > 0.0008) {
           s.last.m = fm;
           for (let i = 0; i < s.os.length; i++) s.os[i].frequency.setTargetAtTime(s.freqs[i] * fm, at, 0.09);
@@ -324,18 +337,20 @@ export function createSingers(E) {
         const s = slots[i];
         if (s.stamp === stamp) continue;
         glide(s.last, 'g', s.out.gain, 0, at, 0.35);
+        glide(s.last, 'tg', s.tg.gain, 0, at, 0.35);
+        glide(s.last, 'tp', s.tp.gain, 0, at, 0.35);
         s.idle += dt;
         if (s.idle > 2.5) { kill(s, at + 0.02); slots.splice(i, 1); }
       }
-      // the shared vibratos: slower and shallower in the dark, wider in a choir
-      if (bank) {
-        for (let i = 0; i < bank.length; i++) {
-          const v = bank[i];
-          glide(bl, VIB_KEYS[i][0], v.o.frequency, v.rate * (1 - 0.5 * dark), at, 0.5);
-          glide(bl, VIB_KEYS[i][1], v.g.gain, v.depth * (1 - 0.4 * dark) + 4 * choir, at, 0.5);
+      // the shared tremolo sleeps once nobody has sung for a while
+      if (trem) {
+        if (slots.length) tremIdle = 0;
+        else if ((tremIdle += dt) > 4) {
+          const t = trem;
+          E.stop(t, at + 0.02);
+          t.onended = () => E.free([t]);
+          trem = null;
         }
-        if (slots.length) bankIdle = 0;
-        else if ((bankIdle += dt) > 4) sleepBank(at + 0.02);
       }
     },
   };
