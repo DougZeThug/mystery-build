@@ -143,12 +143,12 @@ test('fatigue accumulates above total 1.05 and cracks the plate', () => {
   const bus = mkBus();
   const state = { plate: { fatigue: 0.9, cracks: [] } };
   const f = createField({ state, bus, rng: makeRng(42) });
-  f.setSource('a', [{ mode: '1.3+', amp: 1.4 }]);
+  f.setSource('bow', [{ mode: '1.3+', amp: 1.4 }]);
   run(f, 0.2);
   assert.equal(f.fatigueRate, 0, 'still below 1.05 while the attack builds');
   run(f, 1.5);
   assert.ok(f.total > 1.05);
-  near(f.fatigueRate, (f.total - 1.05) ** 2 * 0.9, 1e-6);
+  near(f.fatigueRate, (Math.min(f.total, 1.4 + 0.35) - 1.05) ** 2 * 0.9, 1e-6);
   run(f, 10);
   assert.ok(state.plate.cracks.length >= 1, 'cracked');
   const ev = bus.ev.filter((e) => e.type === 'plate:crack');
@@ -159,16 +159,26 @@ test('fatigue accumulates above total 1.05 and cracks the plate', () => {
   // calm plates heal their fatigue slowly instead
   const s2 = { plate: { fatigue: 0.5, cracks: [] } };
   const g = createField({ state: s2 });
-  g.setSource('a', [{ mode: '1.3+', amp: 0.6 }]);
+  g.setSource('bow', [{ mode: '1.3+', amp: 0.6 }]);
   run(g, 10);
   assert.ok(s2.plate.fatigue < 0.5 && s2.plate.fatigue > 0.4);
   assert.equal(g.fatigueRate, 0);
 });
 
+test('the singers and the floor never tire the bronze', () => {
+  const state = { plate: { fatigue: 0, cracks: [] } };
+  const f = createField({ state, rng: makeRng(3) });
+  f.setSource('chorus', [{ mode: '1.3+', amp: 1.6 }, { mode: '2.4+', amp: 1.6 }]);
+  f.setSource('floor', [{ mode: 'floor', amp: 1.2 }]);
+  run(f, 60);
+  assert.equal(state.plate.cracks.length, 0);
+  assert.equal(f.fatigueRate, 0);
+});
+
 test('at most 7 main cracks; detune capped at .03', () => {
   const state = { plate: { fatigue: 0, cracks: [] } };
   const f = createField({ state, rng: makeRng(1) });
-  f.setSource('a', [{ mode: '1.3+', amp: 1.6 }, { mode: '2.4+', amp: 1.6 }]);
+  f.setSource('bow', [{ mode: '1.3+', amp: 1.6 }, { mode: '2.4+', amp: 1.6 }]);
   run(f, 120);
   const mains = state.plate.cracks.filter((c) => c.branchOf === undefined);
   assert.equal(mains.length, 7);

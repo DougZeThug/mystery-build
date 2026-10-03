@@ -632,9 +632,9 @@ void main() {
     float ph = h11(r * 5000.0);
     c += vec2(sin(uTime * 61.0 + ph * 9.0), cos(uTime * 53.0 + ph * 7.0)) * r * 0.18 * (1.0 - fract(aB.y));
   }
-  if (cling > 0.5) {                                    // clinging on: a constant fine tremble
+  if (cling > 0.5) {                                    // clinging on: a tremble that grows as the grip fails
     float ph = h11(r * 7919.0);
-    c += vec2(sin(uTime * 83.0 + ph * 11.0) + 0.5 * sin(uTime * 131.0), cos(uTime * 71.0 + ph * 5.0) + 0.5 * cos(uTime * 117.0)) * r * 0.05;
+    c += vec2(sin(uTime * 83.0 + ph * 11.0) + 0.5 * sin(uTime * 131.0), cos(uTime * 71.0 + ph * 5.0) + 0.5 * cos(uTime * 117.0)) * r * (0.06 + 0.22 * fract(aB.y));
   }
   vec2 ccss = uPlate.xy + c * uPlate.z;
   vec2 away = ccss - uLamp.xy;

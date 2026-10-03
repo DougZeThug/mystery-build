@@ -186,8 +186,10 @@ function update(dt) {
   game.journal.update?.(dt);
 }
 
+let frameNo = 0;
 function render() {
-  game.gfx.render();
+  // behind the open notebook the scene only needs to breathe, not to be smooth
+  if (!game.journal?.isOpen || (frameNo++ & 1) === 0) game.gfx.render();
   const { dpr, vw, vh } = game.view;
   fxCtx.setTransform(1, 0, 0, 1, 0, 0);
   fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);

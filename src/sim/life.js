@@ -48,7 +48,7 @@ export const TUNE = {
   darkField: 0.06, wakeVoice: 4,   // ...and on waking they find their full voice over a few seconds
   // energy
   feedGain: 0.1,         // dE/dt from agreeable sound (soft-saturated feed)
-  harm: 0.55,            // ...and from disagreeable sound, relative (discord starves more slowly than harmony feeds)
+  harm: 0.28,            // ...and from disagreeable sound, relative (discord starves more slowly than harmony feeds)
   selfExclude: 0.55,     // share of a species' own song it cannot live on
   hearMax: 0.85,         // they hear the plate's total loudness only up to this (an over-driven plate starves no faster)
   deafen: 0.85,          // discord's harm × (1 - deafen·overdrive): a screaming plate is din, not discord
@@ -1075,16 +1075,20 @@ export function createLife(game) {
     const dom = coh.dominant ? modeById(coh.dominant) : null;
     const lightOn = game.light ? game.light.on !== false : true;
     const driven = drivenNow;
-    const minTotal = driven ? TUNE.birthTotal : TUNE.songTotal;
+    // a cylinder replaying the figure of a vanished kind brings it back quickly, even played softly
+    const phono = driven && field.getSource ? field.getSource('phono') : null;
+    const revival = !!(phono && dom && state.species?.[dom.id]?.extinct);
+    const minTotal = revival ? 0.16 : driven ? TUNE.birthTotal : TUNE.songTotal;
     // the first few singers come quickly to a steady bowed figure: the plate is eager to be found out
-    const early = driven && birthsSoFar() < TUNE.earlyBirths;
+    const early = driven && (birthsSoFar() < TUNE.earlyBirths || revival);
     const coherent = dom && !dom.special && dom.k >= 5 && coh.stable > (early ? TUNE.earlyStable : TUNE.birthStable) &&
       coh.share > TUNE.birthShare && field.total > minTotal && lightOn && !floorOn && !choirOn;
     if (!coherent) { quick = Math.max(0, quick - TUNE.quickDecay * dt); return; }
     if (quickMode !== dom.id) { quick *= 0.75; quickMode = dom.id; }
     let rate;
     if (early) {
-      rate = clamp((field.total - TUNE.earlyFrom) / TUNE.earlyRange, 0, 1) * clamp((coh.share - 0.5) / 0.25, 0, 1) / TUNE.earlyGestation;
+      const from = revival ? 0.1 : TUNE.earlyFrom, range = revival ? 0.22 : TUNE.earlyRange;
+      rate = clamp((field.total - from) / range, 0, 1) * clamp((coh.share - 0.5) / 0.25, 0, 1) / TUNE.earlyGestation;
     } else {
       // a new form comes a little sooner while the plate is young (fewer than earlyKinds known); a
       // familiar one (its kind already alive) at its usual, quicker pace
