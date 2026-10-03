@@ -338,6 +338,14 @@ body { overscroll-behavior: none; -webkit-user-select: none; user-select: none; 
 .nb-o-t { color: rgba(var(--lead), 0.58); }
 .nb-o-away { color: rgba(var(--lead), 0.74); }
 .nb-bin { text-decoration: underline; text-decoration-thickness: 0.055em; text-underline-offset: 0.12em; text-decoration-color: rgba(var(--lead), 0.55); }
+/* unread at the last opening: a small graphite tick in the margin */
+.nb-o.nb-new { position: relative; }
+.nb-new::before {
+  content: ''; position: absolute; left: -1.5em; top: 0.18em; width: 0.3em; height: 0.6em; pointer-events: none;
+  border: solid rgba(var(--lead), 0.6); border-width: 0 0.1em 0.1em 0; border-radius: 0 0 0.14em 0;
+  transform: rotate(36deg) skewY(-8deg); filter: blur(0.2px);
+}
+.nb-sp.nb-new::before { font-size: var(--fs-p); top: calc(var(--lh) * 0.5); left: -1.4em; }
 
 /* ---- corners, ribbons, the close tab ---- */
 .nb-turn {

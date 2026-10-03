@@ -111,7 +111,23 @@ export function createJournal(game, rootEl) {
     const s = st();
     const n = s.notebook || (s.notebook = {});
     n.f ||= {}; n.ms ||= {};
+    // readT: when the book was last read (epoch ms). A book opened before this was kept counts as
+    // read up to its last line.
+    if (n.readT == null && n.opened) {
+      const log = Array.isArray(s.log) ? s.log : [];
+      n.readT = log.length ? log[log.length - 1].t || Date.now() : Date.now();
+    }
     return n;
+  }
+  // What has been written since the book was last read: new specimens and new observation lines.
+  function news() {
+    const s = st(), T = nbState().readT || 0;
+    let lines = 0, specimens = 0;
+    const log = Array.isArray(s.log) ? s.log : [];
+    for (let i = log.length - 1; i >= 0; i--) { const e = log[i]; if (!e || !(e.t > T)) break; lines++; }
+    const sp = s.species || {};
+    for (const id in sp) if (sp[id] && sp[id].firstSeen > T) specimens++;
+    return { specimens, lines };
   }
   const speciesList = () => {
     const sp = st().species || {};
@@ -424,6 +440,7 @@ export function createJournal(game, rootEl) {
   const ribbons = [...root.querySelectorAll('.nb-rib')];
 
   let isOpen = false, closing = null;
+  let markT = Infinity;         // lines and specimens written after this were unread when the book opened
   let L = null;                 // layout { spread, pw, ph, s, lh, dpr, key }
   let pages = [];               // page descriptors
   let secStart = {};
@@ -1036,7 +1053,7 @@ export function createJournal(game, rootEl) {
   }
   function buildSpecimen(r, no, meas) {
     const created = st().created;
-    const e = el('div', 'nb-sp' + (r.extinct ? ' nb-gone' : ''));
+    const e = el('div', 'nb-sp' + (r.extinct ? ' nb-gone' : '') + ((r.firstSeen || 0) > markT ? ' nb-new' : ''));
     e.dataset.id = r.id;
     const px = Math.round(clamp(92 * L.s, 72, 116));
     const fig = el('div', 'nb-sp-fig');
@@ -1113,7 +1130,8 @@ export function createJournal(game, rootEl) {
       }
       items.push({
         key: `o|${e.t}|${e.text.length}|${i === 0 ? 0 : 1}`,
-        build: () => el('div', 'nb-o' + (e.kind === 'away' ? ' nb-o-away' : ''),
+        t: e.t || 0,
+        build: () => el('div', 'nb-o' + (e.kind === 'away' ? ' nb-o-away' : '') + (e.t > markT ? ' nb-new' : ''),
           `<span class="nb-o-t">${clock(e.t || Date.now())}</span> — ${penMarkup(e.text)}`),
       });
     }
@@ -1425,6 +1443,23 @@ export function createJournal(game, rootEl) {
     const sc = clamp(110 / (L.spread ? L.pw * 2 : L.pw), 0.08, 0.5);
     return `translate(${(a.x - cx).toFixed(0)}px, ${(a.y - cy).toFixed(0)}px) scale(${sc.toFixed(3)}) rotate(${game.view.mode === 'landscape' ? -9 : 7}deg)`;
   }
+  // The most relevant new thing: one of her pages come loose, else the first new specimen, else the
+  // first new line of the observations; failing all that, wherever the reader left off.
+  function newsTarget(nb) {
+    if (!nb.opened) return viewOf(secStart.flyleaf);
+    if (nb.newKeeper) {
+      const pi = pages.findIndex((p) => p.kind === 'keeper' && p.entry.id === nb.newKeeper);
+      if (pi >= 0) return viewOf(pi);
+    }
+    const fresh = speciesList().find((r) => (r.firstSeen || 0) > markT);
+    if (fresh) {
+      const pi = pages.findIndex((p) => p.kind === 'specimens' && p.items.some((it) => it.id === fresh.id));
+      if (pi >= 0) return viewOf(pi);
+    }
+    const pi = pages.findIndex((p) => p.kind === 'observations' && p.items.some((it) => it.t > markT));
+    if (pi >= 0) return viewOf(pi);
+    return resolveSpot(nb);
+  }
   function open(page) {
     if (closing) { try { closing.cancel(); } catch {} closing = null; finishClose(); }
     if (isOpen) { const v = page != null ? resolveTarget(page) : null; if (v != null) go(v); return; }
@@ -1434,21 +1469,14 @@ export function createJournal(game, rootEl) {
     buildPages();
     sig = contentSig();
     const count = recordCount();
+    // what is new since the last reading (ticked in the margin while the book is open)
+    markT = nb.opened ? nb.readT || 0 : Infinity;
     let v = page != null ? resolveTarget(page) : null;
-    if (v == null) {
-      if (!nb.opened) v = viewOf(secStart.flyleaf);
-      else if (count > (nb.known || 0)) {
-        const newest = speciesList().filter((r) => r.firstSeen != null).pop() || speciesList().pop();
-        const pi = pages.findIndex((p) => p.kind === 'specimens' && p.items.some((it) => it.id === newest?.id));
-        v = viewOf(pi >= 0 ? pi : secStart.specimens);
-      } else if (nb.newKeeper) {
-        const pi = pages.findIndex((p) => p.kind === 'keeper' && p.entry.id === nb.newKeeper);
-        v = pi >= 0 ? viewOf(pi) : resolveSpot(nb);
-      } else v = resolveSpot(nb);
-    }
+    if (v == null) v = newsTarget(nb);
     nb.opened = (nb.opened || 0) + 1;
     nb.known = count;
     nb.newKeeper = null;
+    nb.readT = Date.now();
     cur = clamp(v ?? 0, 0, Math.max(0, nViews() - 1));
     isOpen = true;
     root.setAttribute('aria-hidden', 'false');
@@ -1477,6 +1505,7 @@ export function createJournal(game, rootEl) {
     if (!isOpen) return;
     finishTurn();
     saveSpot();
+    nbState().readT = Date.now();
     isOpen = false;
     root.classList.remove('nb-open');
     root.setAttribute('aria-hidden', 'true');
@@ -1571,6 +1600,9 @@ export function createJournal(game, rootEl) {
     open, close, update, note,
     toggle(page) { if (isOpen) close(); else open(page); },
     get isOpen() { return isOpen; },
+    // new specimens + new observation lines since the book was last read (0 while it is open)
+    get unread() { if (isOpen) return 0; const n = news(); return n.specimens + n.lines; },
+    get news() { return isOpen ? { specimens: 0, lines: 0 } : news(); },
     get page() { return cur; },
     get pageCount() { return L ? nViews() : 0; },
     goTo(page) { const v = resolveTarget(page); if (v != null) go(v, !isOpen); },

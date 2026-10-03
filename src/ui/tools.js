@@ -345,6 +345,7 @@ export function createTools(game) {
     if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.isContentEditable)) return;
     const k = (e.key || '').toLowerCase();
     if (k === 'm') {
+      if (e.repeat) return;
       const a = game.audio;
       if (a?.toggleMute) a.toggleMute();
       else if (a?.setMuted) a.setMuted(!a.muted);
