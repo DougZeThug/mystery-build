@@ -1758,13 +1758,14 @@ export function createLife(game) {
           bump(sp, 'births');
         }
       }
-      // the plate's own song, when one voice dominates, quickens new singers
+      // the plate's own song, when one mode dominates it, quickens singers of that mode (as on the
+      // watched plate: a chord's voices too, so a plate of hybrids does not dwindle to one kind)
       if (!dark && alive.length && motes.length < CAP) {
-        let sum2 = 0, best = null, bv = 0;
-        for (const sp of alive) { const a2 = sp.a * sp.a; sum2 += a2; if (a2 > bv) { bv = a2; best = sp; } }
+        let sum2 = 0, bi = -1, bv = 0;
+        for (let i = 0; i < NM; i++) { const a2 = chorusAmp[i] * chorusAmp[i]; sum2 += a2; if (a2 > bv) { bv = a2; bi = i; } }
         const sparse = Math.pow(Math.max(0, 1 - N / TUNE.songCrowd), 1.5);
-        if (best && best.nc === 1 && bv / sum2 > TUNE.birthShare && Math.sqrt(sum2) > TUNE.songTotal && rng.next() < 1 - Math.exp(-sparse * h / 40)) {
-          let sp = best;                               // and wavers now and then, as it does while watched
+        if (bi >= 0 && MODES[bi].k >= 5 && bv / sum2 > TUNE.birthShare && Math.sqrt(sum2) > TUNE.songTotal && rng.next() < 1 - Math.exp(-sparse * h / 40)) {
+          let sp = getSpecies([MODES[bi].id], false, { gen: 0, parents: null });   // and it wavers now and then, as it does while watched
           if (rng.next() < TUNE.songWaver) { const c = mutateComps(sp, true); if (c) sp = getSpecies(c, sp.aurata, { gen: sp.gen + 1, parents: [sp.id, sp.id] }); }
           makeMote(sp, rng.next() * 1.4 - 0.7, rng.next() * 1.4 - 0.7, TUNE.newbornE, 0, 'walk').dur = 0;
           births++;
@@ -1793,6 +1794,7 @@ export function createLife(game) {
     settleRecords(now);
     for (const m of motes) { m.state = 'walk'; m.st = 0; m.dur = 0; m.grace = m.keeper ? 1e9 : 1; m.r = TUNE.rBase * (m.keeper ? TUNE.keeperR : 1); m.thrown = false; }
     choirCool = Math.max(0, choirCool - secs); floorCool = Math.max(0, floorCool - secs);
+    quickBy.fill(0); ghostRec = null; ghostT = 0;     // whatever figure was forming has long since scattered
     // what the room keeps count of (progress tallies these from events while someone watches)
     const st = state.stats;
     if (st) {
