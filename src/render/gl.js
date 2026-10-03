@@ -23,7 +23,7 @@ const MAX_SINGERS = 64;
 const MIN_SINGER_PX = 9;      // singers are drawn no smaller than about this radius (CSS px)
 const BIRTH_SECS = 5;         // how long a birth's light lasts (see birthGlow in shaders.js)
 const EN_MAX = 2048;          // engraving texture size cap
-const LDR_THRESH = 0.62;      // bloom threshold when the scene cannot hold values above 1
+const LDR_THRESH = 0.8;       // bloom threshold when the scene cannot hold values above 1
 
 // Canonical singer state codes and flag bits as the shaders read them. life.js owns the real
 // encoding (STATES / FLAG); instance data is remapped to these names every frame, so a reordered
