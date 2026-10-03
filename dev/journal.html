@@ -21,7 +21,7 @@
   <button data-open="specimens">specimens</button>
   <button data-open="observations">observations</button>
   <button id="ev">random event</button>
-  <a href="?scenario=fresh">fresh</a><a href="?scenario=mid">mid</a><a href="?scenario=full">full</a>
+  <a href="?scenario=fresh">fresh</a><a href="?scenario=mid">mid</a><a href="?scenario=full">full</a><a href="?scenario=keeper">keeper</a><a href="?scenario=many">many</a>
 </div>
 <script type="module">
 // Standalone notebook harness: a fake game with a believable history, a painted stand-in for the
@@ -31,7 +31,7 @@ import { computeView } from '../src/core/view.js';
 import { createJournal } from '../src/ui/journal.js';
 import { figureCanvas } from '../src/render/gl.js';
 import { nameFor, noteFor, speciesRatioText } from '../src/sim/naming.js';
-import { modeById } from '../src/sim/modes.js';
+import { modeById, MODES } from '../src/sim/modes.js';
 import { clanOf } from '../src/sim/harmony.js';
 
 const params = new URLSearchParams(location.search);
@@ -163,7 +163,8 @@ if (scenario !== 'fresh') {
   ev(step(8), 'mote:death', { mote: mote(E), cause: 'hunger' });
   ev(step(1), 'species:extinct', { species: E });
 }
-if (scenario === 'full') {
+const late = scenario === 'full' || scenario === 'keeper' || scenario === 'many';
+if (late) {
   t = new Date(created + 2 * DAY).setHours(21, 40, 0, 0);
   ev(t, 'plate:heal', { crack: 0 });
   state.plate.cracks[0].healed = true;
@@ -188,6 +189,27 @@ if (scenario === 'full') {
   ev(step(0.01), 'log', { kind: 'away', text: 'They numbered eleven when you left; there are now fourteen.' });
   for (let i = 0; i < 18; i++) ev(step(1.5), 'mote:fuse', { a: mote(A), b: mote(F), child: mote(A), species: A, isNew: false });
   for (let i = 0; i < 12; i++) ev(step(0.5), 'mote:eat', { pred: mote(B), prey: mote(D) });
+}
+// after the floor: her last page comes clear, and she stands up out of the bronze
+if (scenario === 'keeper' || scenario === 'many') {
+  t = now - 9 * min;
+  ev(t, 'floor:end', {});
+  const V = species(['floor']);
+  V.id = 'keeper'; V.keeper = true;
+  state.species.keeper = Object.assign(record(V, step(0.05), { peak: 1, count: 1 }), { keeper: true });
+  at(t, () => bus.emit('species:new', { species: V }));
+  ev(t, 'keeper:arrive', { mote: { sp: 'keeper', spec: V, keeper: true }, species: V, isNew: true });
+  state.seen.keeper = true;
+}
+// a long keeping: thirty-odd kinds, for the layout of the specimens pages
+if (scenario === 'many') {
+  const used = new Set(Object.values(state.species).flatMap((r) => r.comps));
+  const pool = MODES.filter((m) => m.bowable && !used.has(m.id));
+  t = new Date(created + DAY).setHours(9, 0, 0, 0);
+  for (let i = 0; i < 24 && i < pool.length; i++) {
+    const sp = species([pool[i].id]);
+    state.species[sp.id] = record(sp, step(37), { peak: 2 + (i * 7) % 11, count: i % 3 ? 1 + i % 4 : 0, extinct: i % 3 === 0, devoured: i % 5, splits: i % 4 });
+  }
 }
 // living counts the life module would report
 pops = Object.values(state.species).filter((r) => !r.extinct).map((r) => ({ id: r.id, count: r.count }));

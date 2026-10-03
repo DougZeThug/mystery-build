@@ -36,6 +36,9 @@ function seeded(seed) {
   return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return (s >>> 0) / 4294967296; };
 }
 const pick = (arr, key) => arr[hashStr(key) % arr.length];
+// the keeper: the one creature of the fundamental (life.js KEEPER_ID 'keeper', comps ['floor'])
+const isKeeper = (x) => !!x && (x.id === 'keeper' || x.keeper === true ||
+  (Array.isArray(x.comps) && x.comps.length === 1 && x.comps[0] === 'floor'));
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const words = (n) => { try { return Naming.numberWord ? Naming.numberWord(n) : String(n); } catch { return String(n); } };
@@ -208,14 +211,19 @@ export function createJournal(game, rootEl) {
   function flushPending(origin, ctx) {
     const p = pending;
     pending = null;
-    if (p) note('species', speciesLine(p.sp, origin, ctx), { id: p.sp.id });
+    if (!p) return;
+    if (isKeeper(p.sp)) { keeperArrived(); return; }
+    note('species', speciesLine(p.sp, origin, ctx), { id: p.sp.id });
   }
+  // she is not a new form; she is someone
+  function keeperArrived() { first('keeper', 'keeper', 'Someone is walking the rim.', { id: 'keeper' }); }
   const pendingIs = (sp) => !!(pending && sp && pending.sp.id === sp.id);
 
   on('species:new', (e) => {
     if (pending) flushPending('unknown');
     if (e.species) pending = { sp: e.species };
   });
+  on('keeper:arrive', () => { if (pending && isKeeper(pending.sp)) pending = null; keeperArrived(); });
   on('mote:birth', (e) => {
     first('birth', 'birth', 'The sand heaped up where two lines crossed, and stood up, and walked.');
     const sp = e.species;
@@ -309,10 +317,19 @@ export function createJournal(game, rootEl) {
   on('life:floor', (e) => {
     if (!e.on) return;
     const nb = nbState(), now = Date.now();
-    if (first('floor', 'floor', 'Below the lowest note, a lower one. The whole plate hummed, and the sand ran to the rim, and there was writing under it.')) { nb.lastFloor = now; return; }
+    if (first('floor', 'floor', 'Below the lowest note, a lower one. The whole plate hummed, and the sand ran to the rim, and there was writing under it.')) {
+      nb.lastFloor = now;
+      nb.psT ||= now;
+      nb.newKeeper = 'below';
+      return;
+    }
     if (now - (nb.lastFloor || 0) < 300000) return;
     nb.lastFloor = now;
     note('floor', 'The lower note again. I read her writing a second time.');
+  });
+  on('floor:end', () => {
+    if (!st().seen?.floor && !nbState().f.floor) return;
+    first('lastPage', 'keeper', 'Her last page has come clear. There is a line at the foot of it I do not remember.');
   });
   on('light', (e) => {
     if (e.on === false) first('dark', 'dark', 'Put out the lamp. In the dark they glow, and sing an octave lower. There are marks in the bronze I had not seen.');
@@ -381,8 +398,12 @@ export function createJournal(game, rootEl) {
       extSuppressed = 0;
     }
     // the resting finger
-    if (!nb.f.nestle && game.hold && life?.motes) {
-      for (const m of life.motes) if (m.state === 'nestle') { first('nestle', 'nestle', 'Held my finger still on the plate. They came, one by one, and sat against it.'); break; }
+    if (game.hold && life?.motes && (!nb.f.nestle || (!nb.f.keeperNestle && nb.f.keeper))) {
+      for (const m of life.motes) {
+        if (m.state !== 'nestle') continue;
+        if (m.keeper) { first('keeperNestle', 'nestle', 'Held my finger still. She came first, and the others waited until she had sat down.'); break; }
+        if (!nb.f.nestle) { first('nestle', 'nestle', 'Held my finger still on the plate. They came, one by one, and sat against it.'); break; }
+      }
     }
     // her pages (looked at every couple of seconds; nothing here needs to be prompt)
     keeperClock += dt;
@@ -985,8 +1006,16 @@ export function createJournal(game, rootEl) {
       const floorHeard = !!s.seen?.floor;
       const rest = el('div', 'nb-k-rest' + (floorHeard ? ' nb-legible' : ''), inkMarkup(entry.rest || ''));
       wrap.appendChild(rest);
+      if (floorHeard && entry.after) {
+        const nb = nbState();
+        const d = new Date(nb.psT ||= nb.f.floor || Date.now());
+        const ps = el('div', 'nb-k-after');
+        ps.appendChild(el('div', 'nb-k-after-d', `${dateOrdinal(d.getDate())} ${MONTHS[d.getMonth()]}`));
+        ps.appendChild(el('div', 'nb-k-after-t', inkMarkup(entry.after)));
+        wrap.appendChild(ps);
+      }
       page.classList.add('nb-torn');
-      page.appendChild(el('div', 'nb-water'));
+      page.appendChild(el('div', 'nb-water' + (floorHeard ? ' nb-dry' : '')));
     }
     if (entry.stain === 'flower') {
       const fl = flowerStain(Math.round(L.pw * 0.5), Math.round(L.ph * 0.42), hashStr(entry.id + 'fl'));
@@ -1035,7 +1064,11 @@ export function createJournal(game, rootEl) {
   }
   function specimenItems() {
     const s = st(), recs = speciesList();
-    const items = recs.map((r, i) => ({
+    const items = recs.map((r, i) => (isKeeper(r) ? {
+      key: `vossia|${(noteOf(r) || '').length}`,
+      id: r.id,
+      build: (meas) => buildVossia(r, i + 1, meas),
+    } : {
       key: `sp|${r.id}|${(noteOf(r) || '').length}|${r.extinct ? 1 : 0}|${r.parents ? 1 : 0}`,
       id: r.id,
       build: (meas) => buildSpecimen(r, i + 1, meas),
@@ -1045,7 +1078,7 @@ export function createJournal(game, rootEl) {
     const hasGold = recs.some((r) => r.aurata);
     const floorHeard = !!s.seen?.floor;
     const seam = keeperPagesFor(s).some((p) => p.id === 'seam');
-    if (floorHeard) items.push({ key: 'floor|heard', build: (meas) => buildFloorEntry(meas) });
+    if (floorHeard && !recs.some(isKeeper)) items.push({ key: 'floor|heard', build: (meas) => buildFloorEntry(meas) });
     if (!hasGold && seam) items.push({ key: 'q|gold', build: (meas) => buildTeaser('gold', 'Veined with gold? She writes of one born along a mended seam.', meas) });
     if (!has3) items.push({ key: 'q|three', build: (meas) => buildTeaser('three', 'Three voices in one body. Not yet seen.', meas) });
     if (!floorHeard) items.push({ key: 'q|floor', build: (meas) => buildTeaser('floor', 'Something below the lowest note. She heard it once.', meas) });
@@ -1083,6 +1116,50 @@ export function createJournal(game, rootEl) {
       e.appendChild(stamp);
     }
     return e;
+  }
+  // Vossia fundamentalis. The entry is begun in the usual way, and finished in her hand: her figure,
+  // her note, and in place of the count a line of her own. She is never counted and never extinct.
+  function buildVossia(r, no, meas) {
+    const e = el('div', 'nb-sp nb-vossia' + ((r.firstSeen || 0) > markT ? ' nb-new' : ''));
+    e.dataset.id = r.id;
+    const px = Math.round(clamp(92 * L.s, 72, 116));
+    const fig = el('div', 'nb-sp-fig');
+    fig.style.width = px + 'px';
+    fig.appendChild(meas ? sizedBox(px) : sketchCanvas(px, px, 'vossia', (g, w, h) => vossiaSketch(g, w, h)));
+    fig.appendChild(el('span', 'nb-sp-no', `No. ${no}`));
+    e.appendChild(fig);
+    const t = el('div', 'nb-sp-txt');
+    t.appendChild(el('div', 'nb-sp-name', esc(r.name || 'Vossia fundamentalis')));
+    const ratio = ratioLabel(r) || 'k 2';
+    t.appendChild(el('div', 'nb-lab', `${esc(ratio)} <span class="nb-dot">·</span> <span class="nb-lk">clan of one</span>`));
+    const ks = keeping(r.firstSeen || Date.now(), st().created);
+    t.appendChild(el('div', 'nb-lab', `<span class="nb-lk">first seen</span> ${esc(ks.label)}, ${clock(r.firstSeen || Date.now())}`));
+    t.appendChild(el('div', 'nb-vh nb-vh-count', 'Do not trouble to count me.'));
+    e.appendChild(t);
+    const n = noteOf(r);
+    if (n) e.appendChild(el('div', 'nb-sp-note nb-vh', esc(n)));
+    return e;
+  }
+  // the floor's figure in her ink: every grain at the rim, and her on it, going round
+  function vossiaSketch(g, w, h) {
+    stippleFigure(g, w, h, ['floor'], 1891, INK);
+    const rnd = seeded(18910714);
+    const pad = w * 0.07, span = Math.min(w, h) - pad * 2, ox = (w - span) / 2, oy = (h - span) / 2;
+    const X = (u) => ox + (u + 1) * 0.5 * span, Y = (v) => oy + (v + 1) * 0.5 * span;
+    const ink = (a) => `rgba(${INK},${a})`;
+    // the way she came, dotted, along the top
+    const trail = [];
+    for (let i = 0; i <= 14; i++) trail.push([X(-0.46 + i * 0.05), Y(-0.83 + Math.sin(i * 0.9) * 0.008)]);
+    g.setLineDash([0.9, 2.3]); handLine(g, trail, rnd, 0.75, ink(0.55), 0.25); g.setLineDash([]);
+    // her: a pale disc with the floor's own figure in it (a ring), and a little ahead an arrow
+    const cx = X(0.36), cy = Y(-0.83), r0 = span * 0.07;
+    g.fillStyle = 'rgba(243,235,214,1)';
+    g.beginPath(); g.arc(cx, cy, r0 * 1.25, 0, 6.2832); g.fill();
+    g.beginPath(); g.arc(cx, cy, r0, 0, 6.2832); g.strokeStyle = ink(0.85); g.lineWidth = 0.95; g.stroke();
+    g.beginPath(); g.arc(cx, cy, r0 * 0.55, 0, 6.2832); g.strokeStyle = ink(0.6); g.lineWidth = 0.6; g.stroke();
+    const ax = X(0.62), ay = Y(-0.83), al = span * 0.05;
+    handLine(g, [[ax - al * 1.6, ay], [ax, ay]], rnd, 0.8, ink(0.7), 0.2);
+    handLine(g, [[ax - al * 0.7, ay - al * 0.55], [ax, ay], [ax - al * 0.7, ay + al * 0.55]], rnd, 0.8, ink(0.7), 0.2);
   }
   function buildTeaser(which, text, meas) {
     const e = el('div', 'nb-sp nb-q');

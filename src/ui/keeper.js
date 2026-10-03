@@ -6,13 +6,15 @@
 //   __words__   underlined
 //   \n\n        a new paragraph
 //
-// KEEPER_PAGES entry: { id, date, text, unlock?, sketch?, post?, stain?, torn?, rest? }
+// KEEPER_PAGES entry: { id, date, text, unlock?, sketch?, post?, stain?, torn?, rest?, after? }
 //   unlock   a flag name, or an array of names (any one suffices); see isUnlocked() below
 //   post     a later afterthought at the foot of the page, in a hurried hand
 //   sketch   marginal drawings: { kind: 'mode', mode, label } | { kind: 'ring' | 'crack' | 'thimble' |
 //            'tally' | 'flower', label }
 //   torn     the last page: only `text` is legible; `rest` is lost in a water stain until the floor
-//            has sounded, after which it can (just) be made out.
+//            has sounded, after which it reads clearly.
+//   after    on the torn page, once the floor has sounded: a postscript in a steadier ink, dated the
+//            day the floor sounded (the reader's own date, written as she writes hers).
 
 export const KEEPER_PAGES = [
   {
@@ -111,7 +113,8 @@ export const KEEPER_PAGES = [
     text: 'I am going to listen below the floor.',
     rest: 'The still places are where they stand. There must be a stillness under all the others, and I ' +
       'mean to find it. If you are reading this, be patient with them. They forgive a great deal, and they ' +
-      'remember everything. I have left the bow where',
+      'remember everything.',
+    after: 'I found it. It is very quiet here, and not at all lonely.',
   },
 ];
 
