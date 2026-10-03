@@ -11,6 +11,7 @@ import { createPhonograph } from './tools-phono.js';
 import { createMoth } from './tools-moth.js';
 
 const TAP_MS = 220, TAP_PX = 6;          // a click on the plate
+const TAP_MS_TOUCH = 350;                // fingers linger a little longer on a tap
 const HOLD_S = 1.2, HOLD_PX = 5;         // the resting finger
 const SNAP_PX = 18;                      // a drag that starts this close to an edge grabs the bow
 const FADE_S = 3;                        // eyes adjusting to the dark
@@ -98,7 +99,7 @@ export function createTools(game) {
     const id = e && Number.isFinite(e.pointerId) ? e.pointerId : 1;
     let p = ptrs.get(id);
     if (!p) {
-      p = pool.pop() || { id: 0, x: 0, y: 0, x0: 0, y0: 0, t0: 0, type: 'mouse', kind: null, moved: false, sx: 0, sy: 0, st: 0, hold: false, spd: 0, target: null };
+      p = pool.pop() || { id: 0, x: 0, y: 0, x0: 0, y0: 0, t0: 0, type: 'mouse', kind: null, moved: false, sx: 0, sy: 0, st: 0, hold: false, spd: 0, target: null, edge: false };
       p.id = id; ptrs.set(id, p); plist.push(p);
     }
     return p;
@@ -120,7 +121,8 @@ export function createTools(game) {
   const tapComps = [{ mode: null, amp: 0 }, { mode: null, amp: 0 }, { mode: null, amp: 0 }];
   const best = [null, null, null], bestS = [0, 0, 0];
 
-  function tap(x, y, e) {
+  // soft (0..1]: a press that lingered before lifting strikes more gently
+  function tap(x, y, e, soft = 1) {
     const { u, v } = game.view.toPlate(x, y);
     // modes that move most at the tap point (low ones ring longest)
     bestS[0] = bestS[1] = bestS[2] = -1; best[0] = best[1] = best[2] = null;
@@ -134,7 +136,7 @@ export function createTools(game) {
       }
     }
     const pr = e && e.pointerType === 'pen' && e.pressure > 0 ? e.pressure : 0.5;
-    const strength = clamp(0.62 + (pr - 0.5) * 0.5 + (Math.random() - 0.5) * 0.12, 0.35, 1);
+    const strength = clamp(0.62 + (pr - 0.5) * 0.5 + (Math.random() - 0.5) * 0.12, 0.35, 1) * clamp(soft, 0.3, 1);
     const shares = [0.55, 0.36, 0.24];
     let n = 0;
     for (let i = 0; i < 3; i++) {
@@ -232,7 +234,7 @@ export function createTools(game) {
     const p = getPtr(e);
     const touch = e && e.pointerType === 'touch';
     p.x = p.x0 = p.sx = x; p.y = p.y0 = p.sy = y; p.t0 = p.st = performance.now(); p.target = null;
-    p.type = (e && e.pointerType) || 'mouse'; p.moved = false; p.hold = false; p.kind = null;
+    p.type = (e && e.pointerType) || 'mouse'; p.moved = false; p.hold = false; p.kind = null; p.edge = false;
     if (e && e.button > 0) { freePtr(p); return false; }
 
     // the open tray is on top of everything; a press outside it closes it, except on a damper
@@ -249,13 +251,16 @@ export function createTools(game) {
     const dk = cabinet.downPlateDamper(p, x, y, touch);
     if (dk) { p.kind = dk; return true; }
     if (isOn('jar') && jar.heldBy < 0 && jar.hit(x, y, touch)) { jar.pickUp(p.id, x, y); p.kind = 'jar'; return true; }
-    if (cord.hit(x, y, touch) && cord.heldBy < 0) { cord.pickUp(p.id, x, y); p.kind = 'cord'; return true; }
+    // a press on the plate's own edge band is meant for the plate, even under the hanging cord
+    const snap = touch ? SNAP_PX * 1.4 : SNAP_PX;
+    const band = bow.heldBy < 0 && edgeNear(x, y, snap);
+    if (!(band && env.plateHit(x, y)) && cord.heldBy < 0 && cord.hit(x, y, touch)) { cord.pickUp(p.id, x, y); p.kind = 'cord'; return true; }
     if (bow.heldBy < 0 && bow.hit(x, y, touch)) { bow.pickUp(p.id, x, y, false); p.kind = 'bow'; return true; }
     if (isOn('phonograph')) { const ph = phono.hit(x, y, touch); if (ph) { p.kind = 'phono'; p.target = ph; phono.press(ph); return true; } }
     if (isOn('journal') && book.hit(x, y, touch)) { p.kind = 'book'; book.press(true); return true; }
     if (isOn('drawer') && cabinet.hitFront(x, y, touch)) { p.kind = 'front'; return true; }
-    if (bow.heldBy < 0 && edgeNear(x, y, touch ? SNAP_PX * 1.4 : SNAP_PX)) { bow.pickUp(p.id, x, y, true); p.kind = 'bow'; return true; }
-    if (env.plateHit(x, y)) { p.kind = 'press'; return true; }
+    // near an edge: a press that becomes a drag snaps the bow in; one that lifts unmoved is a tap
+    if (band || env.plateHit(x, y)) { p.kind = 'press'; p.edge = band; return true; }
     freePtr(p);
     return false;
   }
@@ -286,8 +291,8 @@ export function createTools(game) {
       case 'press':
         if (!p.hold) {
           if (Math.hypot(x - p.sx, y - p.sy) > HOLD_PX) { p.sx = x; p.sy = y; p.st = performance.now(); }
-          // dragging off the plate's interior onto an edge picks the bow up there
-          if (p.moved && bow.heldBy < 0 && edgeNear(x, y, SNAP_PX * 0.8)) { bow.pickUp(p.id, x, y, true); p.kind = 'bow'; }
+          // a drag begun on the edge band, or one that reaches an edge from the interior, picks the bow up
+          if (p.moved && bow.heldBy < 0 && (p.edge || edgeNear(x, y, SNAP_PX * 0.8))) { bow.pickUp(p.id, x, y, true); p.kind = 'bow'; }
         }
         break;
       case 'bow': bow.samples(e, x, y); break;         // the bow reads the pointer in update, plus its path
@@ -313,12 +318,16 @@ export function createTools(game) {
     const dur = performance.now() - p.t0;
     switch (p.kind) {
       case 'press':
-        if (p.hold) clearHold();
-        else if (!cancel && !p.moved && dur < TAP_MS && env.plateHit(p.x, p.y)) tap(p.x, p.y, e);
+        // a quick press rings the plate; one that lingers (but never became the resting finger) more softly
+        if (!p.hold && !cancel && !p.moved && env.plateHit(p.x, p.y)) {
+          const quick = p.type === 'touch' ? TAP_MS_TOUCH : TAP_MS;
+          if (dur < quick) tap(p.x, p.y, e);
+          else if (dur < HOLD_S * 1000) tap(p.x, p.y, e, 1 - 0.6 * smooth(quick, HOLD_S * 1000, dur));
+        }
         break;
       case 'bow': bow.drop(); break;
       case 'jar': jar.drop(); break;
-      case 'cord': cord.release(cancel ? NaN : p.x, p.y); break;
+      case 'cord': if (cancel) cord.release(NaN, NaN); else cord.release(p.x, p.y); break;
       case 'book':
         book.press(false);
         if (!cancel && !p.moved && book.hit(p.x, p.y, true)) { try { game.journal?.open?.(); } catch (err) { console.error(err); } }
@@ -333,7 +342,7 @@ export function createTools(game) {
       case 'none': break;
       default: cabinet.up(p, p.x, p.y, cancel, dur); break;
     }
-    if (p.hold) clearHold();
+    if (p === holdPtr) clearHold();
     freePtr(p);
   }
   // the window lost focus mid-gesture (alt-tab, a dialog): no release will reach us
@@ -346,11 +355,12 @@ export function createTools(game) {
       if (k && k !== 'press' && k !== 'none' && k !== 'book' && k !== 'front' && k !== 'phono') return 'grabbing';
     }
     if (!game.view) return 'default';
-    if (cabinet.userOpen) { const c = cabinet.cursor(x, y); if (c) return c; }
+    // with the drawer open, a press anywhere but the tray or a placed damper only closes it
+    if (cabinet.userOpen) return cabinet.cursor(x, y) || (cabinet.plateDamperAt(x, y) ? 'grab' : 'default');
     if (cabinet.plateDamperAt(x, y)) return 'grab';
-    if (isOn('jar') && jar.hit(x, y, false)) return 'grab';
-    if (cord.hit(x, y, false)) return 'grab';
-    if (bow.hit(x, y, false)) return 'grab';
+    if (isOn('jar') && jar.heldBy < 0 && jar.hit(x, y, false)) return 'grab';
+    if (cord.heldBy < 0 && cord.hit(x, y, false)) return 'grab';
+    if (bow.heldBy < 0 && bow.hit(x, y, false)) return 'grab';
     if (isOn('phonograph') && phono.hit(x, y, false)) return 'pointer';
     if (isOn('journal') && book.hit(x, y, false)) return 'pointer';
     if (isOn('drawer') && cabinet.hitFront(x, y, false)) return 'pointer';
@@ -397,7 +407,8 @@ export function createTools(game) {
       const p = plist[i];
       if (p.kind !== 'press') continue;
       if (!p.hold) {
-        if (now - p.st >= HOLD_S * 1000 && env.plateHit(p.x, p.y)) setHold(p);
+        // one resting finger at a time: another still finger waits its turn
+        if (!holdPtr && now - p.st >= HOLD_S * 1000 && env.plateHit(p.x, p.y)) setHold(p);
       } else {
         toPlateInto(game.view, p.x, p.y, uvs);
         const nu = clamp(uvs.u, -0.98, 0.98), nv = clamp(uvs.v, -0.98, 0.98);
@@ -409,13 +420,18 @@ export function createTools(game) {
     }
     // fingertip visual
     let pend = 0;
-    for (let i = 0; i < plist.length; i++) { const p = plist[i]; if (p.kind === 'press' && !p.hold) pend = Math.max(pend, smooth(0.25, HOLD_S, (now - p.st) / 1000)); }
+    if (!holdPtr) for (let i = 0; i < plist.length; i++) { const p = plist[i]; if (p.kind === 'press' && env.plateHit(p.x, p.y)) pend = Math.max(pend, smooth(0.25, HOLD_S, (now - p.st) / 1000)); }
     holdPend += (pend - holdPend) * Math.min(1, dt * 10);
     const hv = game.hold === holdObj ? 1 : 0;
     holdVis += (hv - holdVis) * Math.min(1, dt * (hv ? 3 : 5));
     if (holdPtr) { holdX = holdPtr.x; holdY = holdPtr.y; }
     else for (let i = 0; i < plist.length; i++) { const p = plist[i]; if (p.kind === 'press') { holdX = p.x; holdY = p.y; } }
 
+    // backstop: nothing stays in a hand whose pointer is gone
+    if (bow.heldBy >= 0 && !ptrs.has(bow.heldBy)) bow.drop();
+    if (jar.heldBy >= 0 && !ptrs.has(jar.heldBy)) jar.drop();
+    if (cord.heldBy >= 0 && !ptrs.has(cord.heldBy)) cord.release(NaN, NaN);
+    if (holdPtr && ptrs.get(holdPtr.id) !== holdPtr) clearHold();
     bow.update(dt, ptrFor(bow.heldBy));
     jar.update(dt, ptrFor(jar.heldBy));
     book.update(dt);
@@ -568,6 +584,8 @@ export function createTools(game) {
     get phono() { return phono.pub; },
     phonograph: { record: () => phono.record(), stop: () => phono.stop(), play: (i) => phono.play(i), get mode() { return phono.mode; } },
     update, render, pointerDown, pointerMove, pointerUp, cursor, key, reveal,
+    // the mouse's last known position (main re-asks the cursor there when the notebook closes)
+    lastPointer: () => (lastPt.ok ? { x: lastPt.x, y: lastPt.y } : null),
     revealed: (w) => !!want[w],
     get trayOpen() { return cabinet.trayOpen; },
     openDrawer(open = true) { cabinet.toggle(open); },

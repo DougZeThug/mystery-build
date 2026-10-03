@@ -681,17 +681,18 @@ export function createCord(env) {
     const cx = ax + s * (len + st.s) * t, cy = ay + c * (len + st.s) * t;
     return Math.hypot(px - cx, py - cy) < (touch ? 12 : 5);
   }
-  // how far the hand itself has drawn the cord out (from where it took hold): a quick flick on a
-  // slow frame counts even if the drawn cord has not caught up with it yet
-  let gd0 = 0;
-  const handPull = (px, py) => Math.hypot(px - ax, Math.max(0, py - ay)) - gd0;
+  // how far the hand itself has drawn the cord DOWN since it took hold (a sideways stroke swings the
+  // cord but does not pull it): a quick flick on a slow frame counts even if the drawn cord lags
+  let gy0 = 0, s0 = 0;
+  const handPull = (py) => py - gy0;
   function pickUp(id, px, py) {
     heldBy = id; maxPull = 0; clicked = false; env.foundCord?.();
-    gd0 = Number.isFinite(px) ? Math.hypot(px - ax, Math.max(0, py - ay)) : len + ph * 0.45;
+    gy0 = Number.isFinite(py) ? py : ay + len + ph * 0.45;
+    s0 = st.s;
   }
   function release(px, py) {
     heldBy = -1;
-    if (Number.isFinite(px)) maxPull = Math.max(maxPull, Math.min(maxS, handPull(px, py)));
+    if (Number.isFinite(py)) maxPull = Math.max(maxPull, Math.min(maxS, s0 + handPull(py)));
     if (maxPull >= maxS * 0.5) toggle();
     st.vs = -st.s * 2;
   }
@@ -721,7 +722,7 @@ export function createCord(env) {
     if (heldBy >= 0 && ptr) {
       const dx = ptr.x - ax, dy = Math.max(1, ptr.y - ay);
       const ta = clamp(Math.atan2(dx, dy), -0.55, 0.55);
-      const ts = clamp(Math.hypot(dx, dy) - len - ph * 0.45, -len * 0.25, maxS);
+      const ts = clamp(s0 + handPull(ptr.y), -len * 0.25, maxS);
       springAngle(st, 'a', 'va', ta, 30, dt);
       spring(st, 's', 'vs', ts, 34, dt);
       if (st.s > maxPull) maxPull = st.s;
@@ -1276,6 +1277,7 @@ export function createCabinet(env) {
 
     for (const d of dampers) {
       const p = d.ptr >= 0 ? ptrs.get(d.ptr) : null;
+      if (d.ptr >= 0 && !p) { d.ptr = -1; if (d.state === 'drag') d.state = 'return'; }   // its hand is gone
       let tx, ty, lt = 0, w0 = 14;
       if (d.state === 'drag' && p) { tx = p.x; ty = p.y; lt = 1; w0 = 30; }
       else if (d.state === 'plate') { toScreenInto(game.view, d.u, d.v, scr); tx = scr.x; ty = scr.y; w0 = 26; }
@@ -1290,6 +1292,7 @@ export function createCabinet(env) {
       // a struck fork rings down over the same twelve seconds it can drive the plate
       if (fk.e > 0) { const age = game.t - fk.t0; fk.e = age >= FORK_S ? 0 : Math.pow(1 - age / FORK_S, 1.4); }
       const p = fk.ptr >= 0 ? ptrs.get(fk.ptr) : null;
+      if (fk.ptr >= 0 && !p) { fk.ptr = -1; fk.touching = false; if (fk.state === 'drag') fk.state = 'return'; }
       let tx, ty, lt = 0, w0 = 13, ta = 0;
       if (fk.state === 'drag' && p) {
         tx = p.x; ty = p.y; lt = fk.touching ? 0.3 : 1; w0 = 28;
