@@ -382,6 +382,8 @@ test('the keeper does not stand up in the dark; she waits for the light', () => 
   assert.equal(g.life.keeper, null);
   assert.equal(g.life.keeperDue, true);
   g.light.on = true;
+  step(g, TUNE.keeperDelay - 0.5);
+  assert.equal(g.life.keeper, null, 'she waits a moment in the light first');
   step(g, 1);
   assert.ok(g.life.keeper);
   g.life.destroy();

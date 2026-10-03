@@ -131,7 +131,7 @@ export function createLife(game) {
   let kindsKnown = -1;         // species records, the keeper aside (refreshed in upkeepRecords)
   let drivenNow = false;       // is the player (bow, fork, phonograph) driving the plate this step?
   // the keeper
-  let keeperMote = null, keeperSp = null, keeperDue = -1;
+  let keeperMote = null, keeperSp = null, keeperDue = null;   // seconds of quiet left before she rises
   // rare states
   let choirOn = false, choirT = 0, choirBreakT = 0, choirCool = 20, choirSince = 0;
   const choirIds = [];
@@ -650,7 +650,7 @@ export function createLife(game) {
     keeperMote = m;
     state.seen ||= {};
     state.seen.keeper = true; delete state.seen.keeperDue;
-    keeperDue = -1;
+    keeperDue = null;
     const isNew = announce(sp, !fresh);
     const r = recordFor(sp);
     r.keeper = true; r.count = 1; r.peak = Math.max(1, r.peak || 0); r.extinct = false; r.extinctAt = null;
@@ -1332,9 +1332,10 @@ export function createLife(game) {
       keeperMote = null;
       if (state.seen?.keeper) summonKeeper(false);
       else if (state.seen?.keeperDue) {
-        if (keeperDue < 0) keeperDue = TUNE.keeperDelay;
-        keeperDue -= dt;
-        if (keeperDue <= 0 && !darkNow && !(field.amp && field.amp('floor') > 0.2)) summonKeeper(true);
+        // she rises keeperDelay seconds after the low note has died away, and only in the light
+        if (keeperDue === null) keeperDue = TUNE.keeperDelay;
+        if (!darkNow && !(field.amp && field.amp('floor') > 0.2)) keeperDue -= dt;
+        if (keeperDue <= 0) summonKeeper(true);
       }
     }
     // she comes to a still finger first; the others wait for her (a while)

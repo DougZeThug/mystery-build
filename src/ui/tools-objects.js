@@ -11,7 +11,7 @@ const EMPTY = [];
 // ---- shared bits ------------------------------------------------------------------------------------
 // Shadow of an upright object standing on the felt: its silhouette stretched along the felt, away
 // from the lamp, from its base point (bx, by). `hgt` is the object's height in px.
-function uprightShadow(ctx, sh, lamp, bx, by, baseY, hgt, alpha) {
+export function uprightShadow(ctx, sh, lamp, bx, by, baseY, hgt, alpha) {
   const k = 1 / Math.max(1, lamp.z - hgt);
   const dvx = (bx - lamp.x) * k, dvy = (by - lamp.y) * k;
   ctx.save();
@@ -23,7 +23,7 @@ function uprightShadow(ctx, sh, lamp, bx, by, baseY, hgt, alpha) {
   ctx.restore();
 }
 
-function woodGrain(g, rnd, x, y, w, h, base, dark, light, horizontal = true, n = 40) {
+export function woodGrain(g, rnd, x, y, w, h, base, dark, light, horizontal = true, n = 40) {
   g.fillStyle = base; g.fillRect(x, y, w, h);
   g.save(); g.beginPath(); g.rect(x, y, w, h); g.clip();
   for (let i = 0; i < n; i++) {
@@ -43,7 +43,7 @@ function woodGrain(g, rnd, x, y, w, h, base, dark, light, horizontal = true, n =
   g.restore(); g.globalAlpha = 1;
 }
 
-function brassGrad(g, x0, y0, x1, y1) {
+export function brassGrad(g, x0, y0, x1, y1) {
   const b = g.createLinearGradient(x0, y0, x1, y1);
   b.addColorStop(0, '#5e4416'); b.addColorStop(0.3, '#e9cd85'); b.addColorStop(0.55, '#b48a3c'); b.addColorStop(1, '#4a3410');
   return b;
