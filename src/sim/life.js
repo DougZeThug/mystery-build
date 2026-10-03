@@ -53,6 +53,7 @@ export const TUNE = {
   // energy
   feedGain: 0.1,         // dE/dt from agreeable sound (soft-saturated feed)
   harm: 0.28,            // ...and from disagreeable sound, relative (discord starves more slowly than harmony feeds)
+  drivenHarm: 0.6,       // ...scaled while the player drives the plate (time to notice them dimming and stop)
   selfExclude: 0.55,     // share of a species' own song it cannot live on
   hearMax: 0.85,         // they hear the plate's total loudness only up to this (an over-driven plate starves no faster)
   deafen: 0.85,          // discord's harm × (1 - deafen·overdrive): a screaming plate is din, not discord
@@ -770,6 +771,7 @@ export function createLife(game) {
     let feed = sp.feed;
     if (m.state === 'cling') feed *= feed > 0 ? 0.5 : TUNE.braceHarm;   // pressed to the bronze, it holds its breath
     if (feed < 0 && overdrive > 0) feed *= 1 - TUNE.deafen * overdrive;  // and a screaming plate is din, not discord
+    if (feed < 0 && drivenNow) feed *= TUNE.drivenHarm;   // a bowed discord starves them slowly enough to notice
     if (feed > 0) {
       const still = clamp(m.F / (A * A + 0.02), 0, 1);
       feed *= m.vig * crowdMul * (1 - TUNE.stillPenalty * still) * (sp.aurata ? 1 : detuneMul);

@@ -94,5 +94,5 @@ test('the notebook never exclaims, and has no modern idiom', () => {
 test('the floor is five, ten, twenty, forty wherever she writes of it', () => {
   const floor = KEEPER_PAGES.find((p) => p.id === 'floor');
   assert.match(floor.text, /Five, ten, twenty, forty/);
-  assert.ok(ENGRAVINGS.some((l) => /5 · 10 · 20 · 40/.test(l)));
+  assert.ok(ENGRAVINGS.some((l) => /FIVE · TEN · TWENTY · FORTY/.test(l)));
 });

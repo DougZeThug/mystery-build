@@ -99,6 +99,14 @@ const INTERVAL_NAME = {
   '1:5': 'seventeenth', '3:5': 'major sixth', '5:8': 'minor sixth',
 };
 
+// 'a' or 'an' before a word or a number as it is spoken (an 8, an 18, an octave, a fifth)
+function art(x) {
+  const t = String(x).trim().toLowerCase();
+  if (/^\d/.test(t)) return /^(8|11|18)(\D|$)|^8\d|^11\d\d(\D|$)/.test(t) ? 'an' : 'a';
+  return /^[aeiou]/.test(t) ? 'an' : 'a';
+}
+const apart = (iv) => (iv.includes(':') ? `in the ratio ${iv}` : `${art(iv)} ${iv} apart`);
+
 export function intervalName(k1, k2) {
   const [p, q] = ratio(k1, k2);
   return INTERVAL_NAME[`${p}:${q}`] || `${p}:${q}`;
@@ -163,10 +171,14 @@ export function speciesRatioText(species) {
   if (ks.length === 1) {
     const k = ks[0];
     const clan = +clanOf(k);
+    if (clan === 1) {
+      const oct = Math.round(Math.log2(k / 2));
+      return `k ${k} · ${oct === 1 ? 'an octave' : `${words(oct)} octaves`} above the floor`;
+    }
     if (clan !== k) {
       const chain = [];
-      for (let x = clan; x < k; x *= 2) chain.push(x);
-      return `k ${k} · above ${chain.slice(-2).join(' and ')}`;
+      for (let x = clan; x < k; x *= 2) if (K_VALUES.includes(x)) chain.push(x);
+      return chain.length ? `k ${k} · above ${chain.slice(-2).join(' and ')}` : `k ${k} · of the clan of ${words(clan)}`;
     }
     const octave = K_VALUES.includes(k * 2) ? ` · octave ${k * 2}` : ' · no octave upon the plate';
     return `k ${k}${octave}`;
@@ -268,15 +280,15 @@ function global(stats) {
 
 const NOTES = [
   // --- general temperament, by clan and pitch
-  [(c) => c.clan5 && c.nc === 1, (c) => `Of the clan of five, and sociable with all its octaves. Sings a ${c.k} and expects to be answered in kind.`],
+  [(c) => c.clan5 && c.nc === 1, (c) => `Of the clan of five, and sociable with all its octaves. Sings ${art(c.k)} ${c.k} and expects to be answered in kind.`],
   [(c) => c.clan5, (c) => `A creature of the octave chain; it is never more content than when the ${c.friend}s are singing nearby.`],
   [(c) => c.prime, (c) => `A solitary sort. Its ${c.k} agrees with almost nothing upon the plate, and it appears to know this.`],
   [(c) => c.prime, (c) => `Belongs to the clan of ${words(+c.clan)}, a small and private family. It keeps its own counsel and its own line.`],
   [(c) => c.nc === 1 && c.k >= 40, (c) => `A high, thin singer. Walks quickly and never quite settles, as though the ${c.k} were an inconvenience to carry.`],
   [(c) => c.nc === 1 && c.k <= 10, (c) => `A low and unhurried voice. It is the last to be disturbed when the plate grows loud.`],
   [(c) => c.nc === 1 && c.k > 10 && c.k < 40, (c) => `Middling in pitch and in manner. Keeps to the still lines with great propriety.`],
-  [(c) => !!c.foe, (c) => `Will not abide a ${c.foe} anywhere upon the plate, and grows thin while one is sung.`],
-  [(c) => !!c.friend && c.nc === 1, (c) => `Thrives when a ${c.friend} is sounding; on such evenings it can scarcely be kept to its line.`],
+  [(c) => !!c.foe, (c) => `Will not abide ${art(c.foe)} ${c.foe} anywhere upon the plate, and grows thin while one is sung.`],
+  [(c) => !!c.friend && c.nc === 1, (c) => `Thrives when ${art(c.friend)} ${c.friend} is sounding; on such evenings it can scarcely be kept to its line.`],
   [(c) => !!c.octaveUp, (c) => `Its octave, the ${c.octaveUp}, is its natural companion. The two have been seen walking the same line in step.`],
   [(c) => !!c.octaveDown, (c) => `Sits an octave above the ${c.octaveDown} and appears to defer to it, as a younger sibling might.`],
   [() => true, (c) => `Walks the nodal lines in short purposeful stretches, pausing at the crossings as if to read a signpost.`],
@@ -285,7 +297,7 @@ const NOTES = [
   [(c) => c.peak >= 4, (c) => `Gathers in loose companies of its own kind and hums in near unison. The effect is rather fine.`],
 
   // --- hybrids and chords
-  [(c) => c.nc === 2, (c) => `A chord of two voices, a ${c.interval} apart. It sings both at once without apparent effort.`],
+  [(c) => c.nc === 2, (c) => `A chord of two voices, ${apart(c.interval)}. It sings both at once without apparent effort.`],
   [(c) => c.nc === 2 && !!c.parentNames, (c) => `Got of ${c.parentNames}. Holds the ${c.interval} of its parents in a single body.`],
   [(c) => c.nc === 2, (c) => `Its two figures turn against each other within the body, like the wheels of a small and patient clock.`],
   [(c) => c.nc === 3, (c) => `Three voices in one body. It walks as if carrying something that might spill.`],
@@ -299,7 +311,7 @@ const NOTES = [
   [(c) => c.devoured >= 2 && !!c.octaveDown, (c) => `Observed to devour its own relations when hungry, which is poor manners.`],
   [(c) => c.devoured >= 2, (c) => `A lunging, opportunistic hunter. Approaches dissonant company sideways, then all at once.`],
   [(c) => c.devoured >= 5, (c) => `The terror of the plate. Lesser voices go quiet when it walks.`],
-  [(c) => c.eaten >= 1 && c.eaten < 3, (c) => `Has been taken by a hungrier singer. Its kind now keep closer together.`],
+  [(c) => c.eaten >= 1 && c.eaten < 3 && !c.extinct, (c) => `Has been taken by a hungrier singer. Its kind now keep closer together.`],
   [(c) => c.eaten >= 3, (c) => `Much preyed upon (${words(c.eaten)} lost to the jaws of others). Startles at the slightest discord.`],
   [(c) => c.eaten >= 2 && c.devoured >= 2, (c) => `Both eats and is eaten, with no apparent sense that the two are related.`],
 

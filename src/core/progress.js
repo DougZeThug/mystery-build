@@ -22,7 +22,8 @@ export function createProgress(game) {
   // milestone flags (the notebook unlocks the keeper's pages from these)
   const flag = (f) => { state.seen[f] = true; };
   bus.on('mote:birth', () => flag('firstBirth'));
-  bus.on('mote:death', (e) => { if (e.cause === 'age') flag('firstGold'); });
+  bus.on('mote:death', (e) => { flag('firstDeath'); if (e.cause === 'age') flag('firstGold'); });
+  bus.on('mote:eat', () => flag('firstEat'));
   bus.on('mote:fuse', () => flag('firstFusion'));
   bus.on('plate:crack', () => flag('firstCrack'));
   bus.on('plate:heal', () => flag('firstHeal'));
@@ -54,10 +55,8 @@ export function createProgress(game) {
   const speciesCount = () => Object.keys(state.species || {}).length;
 
   // In the dark the singers' plate dreams of the extinct (life drives the sand); note it once.
-  let darkFor = 0;
-  function dream(dt) {
-    if (!game.light.on && !game.tools?.bow?.bowing) darkFor += dt; else darkFor = 0;
-    if (darkFor > 30 && !state.seen.dreamed && game.sand?.dreaming && Object.values(state.species || {}).some((r) => r.extinct)) {
+  function dream() {
+    if (!state.seen.dreamed && (game.sand?.dreamTime || 0) > 30 && Object.values(state.species || {}).some((r) => r.extinct)) {
       state.seen.dreamed = true;
       bus.emit('log', { kind: 'dream', text: 'In the dark the sand moved by itself, into a figure I had not seen in some time.' });
     }
@@ -66,7 +65,7 @@ export function createProgress(game) {
   return {
     reveal, revealed,
     update(dt) {
-      dream(dt);
+      dream();
       if (floorResume > 0 && game.started) {
         floorResume -= dt;
         if (floorResume <= 0 && state.seen.floorPending) bus.emit('floor:end', {});
