@@ -269,6 +269,25 @@ export function createBow(env) {
   let curEdge = null;
   let contact = false, contactLX = 0, pressure = 0, amp = 0, sp = 0, spFast = 0, spPick = 0, tPick = -1, pickEdge = null;
   let lastPx = 0, lastPy = 0, lastT = 0, vpx = 0, vpy = 0;
+  // the hand's recent path (real time): its vigour is the distance travelled along the edge per
+  // second over a short window, so a back-and-forth scrub reads as one steady speed, reversals and all
+  const HN = 48;
+  const hT = new Float64Array(HN), hX = new Float32Array(HN), hY = new Float32Array(HN);
+  let hHead = 0, hN = 0;
+  function hPush(t, x, y) { hT[hHead] = t; hX[hHead] = x; hY[hHead] = y; hHead = (hHead + 1) % HN; if (hN < HN) hN++; }
+  function hSpeed(win, tx, ty, now) {
+    if (hN < 2) return 0;
+    let i = (hHead - 1 + HN) % HN, px = hX[i], py = hY[i], t0 = hT[i], dist = 0;
+    for (let k = 1; k < hN; k++) {
+      const j = (i - 1 + HN) % HN;
+      if (now - hT[j] > win * 1000) break;
+      dist += Math.abs((px - hX[j]) * tx + (py - hY[j]) * ty);
+      px = hX[j]; py = hY[j]; t0 = hT[j]; i = j;
+    }
+    const span = (now - t0) / 1000;
+    return span > 0.03 ? dist / span : 0;
+  }
+  let grabT = 0, bandT = 0;
   let returning = false, travelled = 0;
   let glintT = 0, idle = 0;
   let pressT = 0;
@@ -369,6 +388,7 @@ export function createBow(env) {
     grab.aFree = pose.a;
     if (fast) { grab.sx = L * 0.56; grab.sy = 0; }
     lastPx = px; lastPy = py; lastT = performance.now(); vpx = vpy = 0;
+    hN = 0; hPush(lastT, px, py); grabT = lastT; bandT = 0;
     sp = 0; spFast = 0; spPick = 0; amp = 0; curEdge = null;
     out.held = true;
     idle = 0;

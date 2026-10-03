@@ -531,6 +531,12 @@ export function createPhonograph(env) {
     if (cyl && index >= 0) startFly(cyl, true, index);
     play.cyl = null;
   }
+  // the modes a cylinder holds, loudest first (summed over its frames)
+  function modesOf(cyl, n = 3) {
+    const acc = Object.create(null);
+    for (const f of cyl.frames || EMPTY) for (const e of f) if (Array.isArray(e)) acc[e[0]] = (acc[e[0]] || 0) + (+e[1] || 0);
+    return Object.keys(acc).sort((a, b) => acc[b] - acc[a]).slice(0, n);
+  }
   // the plate's song at time t, eased between frames, into `comps`
   function frameAt(cyl, t) {
     const F = cyl.frames, dt = cyl.dt || REC_DT;
@@ -621,7 +627,7 @@ export function createPhonograph(env) {
     if (mode === 'play') {
       play.t += dt;
       if (play.t >= 0) {
-        if (!play.started) { play.started = true; env.emit('phono:play', { on: true, index: cyls().indexOf(play.cyl) }); }
+        if (!play.started) { play.started = true; env.emit('phono:play', { on: true, index: cyls().indexOf(play.cyl), modes: modesOf(play.cyl), label: play.cyl.label || null }); }
         const a = frameAt(play.cyl, Math.min(play.t, play.dur));
         play.amp = a; pub.amp = a;
         game.field?.setSource?.('phono', live.length ? live : EMPTY);
