@@ -104,7 +104,12 @@ export function createTools(game) {
     return p;
   };
   const freePtr = (p) => { ptrs.delete(p.id); const i = plist.indexOf(p); if (i >= 0) plist.splice(i, 1); p.kind = null; p.target = null; pool.push(p); };
+  const idOf = (e) => (e && Number.isFinite(e.pointerId) ? e.pointerId : 1);
+  // a release we will never hear about: the browser took the pointer back (lost capture, a gesture)
+  const isCancel = (e) => !!e && (e.type === 'pointercancel' || e.type === 'lostpointercapture');
   let hoverX = -1, hoverY = -1;
+  const lastPt = { x: 0, y: 0, ok: false };      // where the mouse (or pen) was last seen
+  const notePt = (x, y, e) => { if (Number.isFinite(x) && !(e && e.pointerType === 'touch')) { lastPt.x = x; lastPt.y = y; lastPt.ok = true; } };
 
   // ---- the resting finger and taps -----------------------------------------------------------------
   const holdObj = { u: 0, v: 0, t: 0 };
@@ -220,6 +225,10 @@ export function createTools(game) {
   function pointerDown(x, y, e) {
     if (!game.view) return false;
     if (game.journal?.isOpen) return false;
+    notePt(x, y, e);
+    // a press on a pointer we still think is down: its release went missing, so end that first
+    const stale = ptrs.get(idOf(e));
+    if (stale) finish(stale, true, null);
     const p = getPtr(e);
     const touch = e && e.pointerType === 'touch';
     p.x = p.x0 = p.sx = x; p.y = p.y0 = p.sy = y; p.t0 = p.st = performance.now(); p.target = null;
@@ -253,8 +262,10 @@ export function createTools(game) {
 
   function pointerMove(x, y, e) {
     if (!game.view) return;
-    const id = e && Number.isFinite(e.pointerId) ? e.pointerId : 1;
-    const p = ptrs.get(id);
+    notePt(x, y, e);
+    let p = ptrs.get(idOf(e));
+    // a mouse or pen moving with no button held was released somewhere we never heard about
+    if (p && e && e.pointerType !== 'touch' && e.buttons === 0) { finish(p, true, null); p = null; }
     if (!p) {
       // hover
       const t = (e && e.pointerType) || 'mouse';
@@ -289,11 +300,16 @@ export function createTools(game) {
   }
 
   function pointerUp(x, y, e) {
-    const id = e && Number.isFinite(e.pointerId) ? e.pointerId : 1;
-    const p = ptrs.get(id);
+    const p = ptrs.get(idOf(e));
     if (!p) return false;
-    if (Number.isFinite(x)) { p.x = x; p.y = y; }
-    const cancel = e && e.type === 'pointercancel';
+    const cancel = isCancel(e);
+    if (!cancel && Number.isFinite(x)) { p.x = x; p.y = y; notePt(x, y, e); }
+    finish(p, cancel, e);
+    return true;
+  }
+
+  // end a pointer's gesture: a release, or (cancel) a gesture the hand never finished
+  function finish(p, cancel, e) {
     const dur = performance.now() - p.t0;
     switch (p.kind) {
       case 'press':
@@ -317,9 +333,12 @@ export function createTools(game) {
       case 'none': break;
       default: cabinet.up(p, p.x, p.y, cancel, dur); break;
     }
+    if (p.hold) clearHold();
     freePtr(p);
-    return true;
   }
+  // the window lost focus mid-gesture (alt-tab, a dialog): no release will reach us
+  function cancelAll() { while (plist.length) finish(plist[plist.length - 1], true, null); }
+  try { window.addEventListener('blur', cancelAll); } catch { /* no window */ }
 
   function cursor(x, y) {
     for (let i = 0; i < plist.length; i++) {

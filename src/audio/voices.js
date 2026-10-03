@@ -4,7 +4,7 @@
 // and only when they actually change (glide), so nothing clicks and the automation queue stays
 // short. Nothing here allocates per frame once a voice is awake.
 import { MODES } from '../sim/modes.js';
-import { voiceChord, hash01, pitchGroups, powerByPitch, spreadOffset } from './dsp.js';
+import { voiceChord, hash01, pitchGroups, powerByPitch, spreadOffset, minGap, singerDetune } from './dsp.js';
 
 const TAU = Math.PI * 2;
 const PITCH = pitchGroups(MODES);            // modes -> distinct pitches (the n.m± twins share one)
@@ -235,18 +235,12 @@ export function createSingers(E) {
     const twin = 6 + 6 * h2;
     const pos = freqs.map(centsOf);
     pos.push(pos[0] + twin);
-    // the pitches already sounding, and the vibrato rates of the voices it would beat against
-    const taken = [], rates = [];
-    for (const o of slots) {
-      let near = false;
-      for (const c of o.pos) {
-        taken.push(c);
-        for (const p of pos) if (Math.abs(c - p) < NEAR) near = true;
-      }
-      if (near) rates.push(o.rate);
-    }
-    const det = spreadOffset(pos, taken, (h - 0.5) * 12, DETUNE);
+    // its fixed detune, kept clear of the pitches already sounding; its vibrato rate, apart from
+    // the voices it would beat against
+    const det = singerDetune(pos, freqs.length, slots, (h - 0.5) * 12, DETUNE);
     for (let i = 0; i < pos.length; i++) pos[i] += det;
+    const rates = [];
+    for (const o of slots) if (minGap(pos, o.pos) < NEAR) rates.push(o.rate);
     const rate = spreadOffset([0], rates, VIB_RATE.lo + (VIB_RATE.hi - VIB_RATE.lo) * h3, VIB_RATE);
     // voice -> gain (level) -> tremolo stage -> pan
     const out = E.gain(0), ts = E.gain(1), pan = E.pan(0);
@@ -270,7 +264,7 @@ export function createSingers(E) {
     trem.connect(tp);
     for (const o of os) tp.connect(o.detune);
     tp.connect(oc.detune);
-    const s = { id: sp.id, freqs, os, oc, gc, out, ts, pan, vo, vib, tg, tp, h, det, rate, depth, pos,
+    const s = { id: sp.id, freqs, os, oc, gc, out, ts, pan, vo, vib, tg, tp, h, det, rate, depth, pos, nMain: freqs.length,
       ph: h * TAU, bw: TAU / (5 + 4 * h2), stamp, idle: 0, last: {} };
     slots.push(s);
     return s;

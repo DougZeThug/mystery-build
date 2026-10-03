@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 import {
   mulberry, hash01, whiteNoise, pinkNoise, brownNoise, roomTone, reverbChannel, crackle, sandGrains, crumble, crinkle,
   softClipCurve, foldInto, voiceChord, droneRootHz, rms, peak, BUFFER_JOBS, resample,
-  waxCrackle, clockwork, PHONO_TURN,
+  waxCrackle, clockwork, PHONO_TURN, pitchGroups, powerByPitch, spreadOffset, minGap, singerDetune,
 } from '../src/audio/dsp.js';
+import { MODES, modeById } from '../src/sim/modes.js';
 
 const SR = 8000;   // small rate keeps the tests fast; the generators are rate-agnostic
 const mean = (x) => x.reduce((a, b) => a + b, 0) / x.length;
@@ -123,4 +124,58 @@ test('phonograph loops: whole turns, zero-mean, bounded, seamless, repeating onc
   let ab = 0, aa = 0, bb = 0;
   for (let i = 0; i < P; i++) { const a = c[i] * c[i], b = c[i + P] * c[i + P]; ab += a * b; aa += a * a; bb += b * b; }
   assert.ok(ab / Math.sqrt(aa * bb) > 0.3, 'tick energy recurs each turn');
+});
+
+test('pitch groups: modes that share k share one voice, at their power sum', () => {
+  const P = pitchGroups(MODES);
+  const g = (id) => P.group[modeById(id).index];
+  assert.equal(g('1.2+'), g('1.2-'));
+  assert.equal(g('1.7+'), g('5.5+'));                        // k = 50 three ways
+  assert.notEqual(g('1.2+'), g('1.3+'));
+  assert.equal(g('floor'), -1, 'the floor has its own voice');
+  assert.equal(P.count, new Set(MODES.filter((m) => !m.special).map((m) => m.k)).size);
+  for (const m of MODES) if (!m.special) assert.equal(P.hz[P.group[m.index]], m.freq);
+  const amps = new Float32Array(MODES.length), out = new Float32Array(P.count);
+  amps[modeById('1.2+').index] = 0.3; amps[modeById('1.2-').index] = 0.4; amps[modeById('2.4+').index] = 0.5;
+  amps[modeById('floor').index] = 1;
+  powerByPitch(amps, P.group, out);
+  assert.ok(Math.abs(out[g('1.2+')] - 0.5) < 1e-6);
+  assert.ok(Math.abs(out[g('2.4+')] - 0.5) < 1e-6);
+  assert.equal(out.reduce((a, b) => a + b, 0).toFixed(6), (1).toFixed(6));
+});
+
+test('spread offset: stays near its preference, in range, and clear of what is taken when it can', () => {
+  const D = { lo: -7, hi: 7, step: 0.25, min: 2.5 };
+  assert.equal(spreadOffset([0], [], 3, D), 3, 'nothing taken: its own preference');
+  assert.equal(spreadOffset([1200], [5000], -2, D), -2, 'far values do not matter');
+  const d = spreadOffset([0], [0.5], 0, D);
+  assert.ok(minGap([0], [0.5], d) >= 2.5 && Math.abs(d) <= 2.25 + 1e-9, `moved just clear: ${d}`);
+  assert.equal(spreadOffset([0], [], 9, D), 7, 'preference clamped into range');
+  // nothing clears: the widest gap wins, still in range
+  const crowd = [];
+  for (let c = -7; c <= 7; c += 1) crowd.push(c);
+  const y = spreadOffset([0], crowd, 0, D);
+  assert.ok(y >= D.lo && y <= D.hi);
+  assert.ok(Math.abs(minGap([0], crowd, y) - 0.5) < 1e-9, `between two taken values: ${y}`);
+});
+
+test('singer detune: kinds on one pitch never lock together', () => {
+  const D = { lo: -7, hi: 7, step: 0.25, min: 2.5 };
+  const c = (f) => 1200 * Math.log2(f);
+  // the four kinds that all sing 275 Hz (1.2±: k 5, 1.3±: k 10), each with a crowd twin above,
+  // arriving one by one with nearly the same preferred detune
+  const sounding = [];
+  for (const [pref, twin] of [[0.4, 9], [0.1, 7], [-0.2, 11], [0.3, 8]]) {
+    const pos = [c(275), c(275) + twin];
+    const d = singerDetune(pos, 1, sounding, pref, D);
+    assert.ok(d >= D.lo && d <= D.hi, `in range: ${d}`);
+    for (const v of sounding) assert.ok(Math.abs(pos[0] + d - v.pos[0]) >= 2.5 - 1e-9, 'components keep apart');
+    if (sounding.length === 1) assert.ok(minGap(pos, sounding[0].pos, d) >= 2.5 - 1e-9, 'two kinds: twins clear too');
+    sounding.push({ pos: pos.map((p) => p + d), nMain: 1 });
+  }
+  // alone, a voice keeps its own detune; a chord that shares one pitch with a sounding voice moves
+  assert.equal(singerDetune([c(275), c(275) + 9], 1, [], -3.5, D), -3.5);
+  const chord = [c(275), c(550), c(275) + 6];
+  const d = singerDetune(chord, 2, [{ pos: [c(550) + 0.5, c(550) + 10], nMain: 1 }], 0, D);
+  assert.ok(Math.abs(chord[1] + d - (c(550) + 0.5)) >= 2.5 - 1e-9);
 });

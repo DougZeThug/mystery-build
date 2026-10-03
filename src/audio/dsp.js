@@ -502,9 +502,7 @@ export function powerByPitch(amps, group, out) {
 
 // Pick an offset d in [lo, hi] (a grid of `step`), as close to `pref` as possible, such that every
 // point + d keeps at least `min` from every value in `taken`; if none clears `min`, the one that
-// keeps the widest gap. Singers use it for their fixed detune (points = their pitches in cents,
-// taken = pitches already sounding) so that two kinds on one pitch beat slowly rather than add or
-// cancel by phase, and to keep coinciding kinds off each other's vibrato rate.
+// keeps the widest gap. (Singers keep coinciding kinds off each other's vibrato rate with it.)
 export function spreadOffset(points, taken, pref, { lo, hi, step, min }) {
   pref = Math.max(lo, Math.min(hi, pref));
   const n = Math.ceil((hi - lo) / step);
@@ -512,15 +510,38 @@ export function spreadOffset(points, taken, pref, { lo, hi, step, min }) {
   for (let j = 0; j <= 2 * n; j++) {
     const d = pref + (j & 1 ? 1 : -1) * ((j + 1) >> 1) * step;   // pref, +step, -step, +2·step ...
     if (d < lo - 1e-9 || d > hi + 1e-9) continue;
-    let gap = Infinity;
-    for (let a = 0; a < points.length; a++) {
-      for (let b = 0; b < taken.length; b++) {
-        const x = Math.abs(points[a] + d - taken[b]);
-        if (x < gap) gap = x;
-      }
-    }
+    const gap = minGap(points, taken, d);
     if (gap >= min) return d;
     if (gap > bestGap) { bestGap = gap; best = d; }
   }
   return best;
+}
+
+// the smallest distance between any point + d and any taken value (Infinity if either is empty)
+export function minGap(points, taken, d = 0) {
+  let gap = Infinity;
+  for (let a = 0; a < points.length; a++) {
+    for (let b = 0; b < taken.length; b++) {
+      const x = Math.abs(points[a] + d - taken[b]);
+      if (x < gap) gap = x;
+    }
+  }
+  return gap;
+}
+
+// A singer's fixed detune, in cents. Kinds often share a pitch (the ± twins; k and 2k fold onto one
+// octave), and two oscillators on one pitch add or cancel by the accident of their phases; a few
+// cents apart they beat slowly instead. `pitches`: the new voice's pitches in cents, its `nMain`
+// components first, then its crowd twin. `sounding`: the voices already singing, as
+// { pos, nMain } (pos already detuned). As close to `pref` (its own, from its name) as allows every
+// pitch to keep `min` from every sounding one; when that cannot be had, its components keep clear
+// of the other voices' components (the quieter crowd twins may then meet).
+export function singerDetune(pitches, nMain, sounding, pref, opts) {
+  const all = [], main = [];
+  for (const v of sounding) {
+    for (let i = 0; i < v.pos.length; i++) { all.push(v.pos[i]); if (i < v.nMain) main.push(v.pos[i]); }
+  }
+  const d = spreadOffset(pitches, all, pref, opts);
+  if (minGap(pitches, all, d) >= opts.min) return d;
+  return spreadOffset(pitches.slice(0, nMain), main, pref, opts);
 }
